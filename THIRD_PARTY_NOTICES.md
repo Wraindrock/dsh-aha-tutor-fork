@@ -22,4 +22,6 @@ The board's handwriting fonts in `assets/fonts/` are subsets converted to WOFF2 
 
 DeepSeek Harness packages (`@deepseek-ai/*`) and React are provided by the DSH runtime and are not redistributed.
 
+The `Sec-MS-GEC` token in `src/host/edge-tts.js` follows the algorithm published by [msedge-tts](https://github.com/andresaya/edge-tts) 2.1.1 (MIT, © Andrés Aya) and documented by [edge-tts](https://github.com/rany2/edge-tts) (LGPL-3.0, © rany). The file is an independent implementation of the same, publicly described hash; no code is copied verbatim.
+
 Artwork in `docs/assets/` and `icon.png` was created for this project with ChatGPT image generation. Sample courses in `samples/` were written for this project.

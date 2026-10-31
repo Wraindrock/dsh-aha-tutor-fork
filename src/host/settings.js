@@ -26,7 +26,7 @@ export function cleanPrefs(input = {}, base = PREF_DEFAULTS) {
   for (const key of ['teachProvider', 'teachModel', 'quickProvider', 'quickModel']) {
     if (input[key] !== undefined) next[key] = ROUTE.test(String(input[key])) ? String(input[key]) : base[key]
   }
-  if (['browser', 'cloud', 'off'].includes(input.voiceEngine)) next.voiceEngine = input.voiceEngine
+  if (['browser', 'edge', 'cloud', 'off'].includes(input.voiceEngine)) next.voiceEngine = input.voiceEngine
   if (input.voiceRate !== undefined) {
     const rate = Number(input.voiceRate)
     if (Number.isFinite(rate)) next.voiceRate = Math.min(2, Math.max(0.5, Math.round(rate * 100) / 100))
@@ -66,8 +66,11 @@ export function createPrefs(store) {
 
 // DSH credentials, record style (no fallback to environment variables).
 export function createKeyStore({ getCredentials, credentialKey }) {
+  // Providers without a secret field (the Edge voice) have no key to keep.
+  const keyed = provider => (PROVIDER_FIELDS[provider] ?? []).some(field => field.secret)
   const keyOf = provider => {
     if (!TTS_PROVIDERS.includes(provider)) throw new TutorError('invalid', 'Unknown TTS provider')
+    if (!keyed(provider)) throw new TutorError('invalid', 'This speech service takes no key')
     return credentialKey('aha-tutor', `tts-${provider}`)
   }
   const service = () => {
@@ -77,12 +80,17 @@ export function createKeyStore({ getCredentials, credentialKey }) {
   }
   return {
     async read(provider) {
+      if (!keyed(provider)) return undefined
       const record = await service().readRecord(keyOf(provider))
       return record?.kind === 'api-key' && typeof record.key === 'string' ? record.key : undefined
     },
     async status() {
       const result = {}
       for (const provider of TTS_PROVIDERS) {
+        if (!keyed(provider)) {
+          result[provider] = false
+          continue
+        }
         try {
           const info = await service().describeRecord(keyOf(provider))
           result[provider] = info?.configured === true

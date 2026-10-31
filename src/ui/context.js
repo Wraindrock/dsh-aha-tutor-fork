@@ -17,7 +17,7 @@ export const SETTINGS_CHANNEL = 'aha-tutor:settings'
 
 export function useAppValue({ rpc, t, language, dsh, navigate = () => undefined, back = () => undefined }) {
   const api = useMemo(() => createApi(rpc), [rpc])
-  const speech = useMemo(() => createSpeech({ fetchAudio: text => fetchSpeech(api, text) }), [api])
+  const speech = useMemo(() => createSpeech({ fetchAudio: (text, provider) => fetchSpeech(api, text, provider) }), [api])
   useEffect(() => () => speech.dispose(), [speech])
   const [hostSettings, setHostSettings] = useState({})
   const [voiceId, keepVoiceId] = usePersistentState('voice', '')
@@ -35,7 +35,7 @@ export function useAppValue({ rpc, t, language, dsh, navigate = () => undefined,
   // Speech learns the cloud voice before the page re-renders, so speaking
   // right after a save (Settings' Test) already uses the new voice.
   const reloadSettings = useCallback(() => api.call('settings/get').then(value => {
-    speech.configure({ cloudVoice: cloudVoiceOf(value) })
+    speech.configure({ cloudVoice: cloudVoiceOf(value), edgeVoice: cloudVoiceOf(value, 'edge') })
     setHostSettings(value)
     if (typeof value?.textSize === 'string') keepTextSize(value.textSize)
   }).catch(() => undefined), [api, speech, keepTextSize])
@@ -72,14 +72,15 @@ export function useAppValue({ rpc, t, language, dsh, navigate = () => undefined,
 }
 
 // Cloud audio comes from the host's HTTP route; older hosts without fetch
-// routes fall back to base64 over RPC.
-export async function fetchSpeech(api, text) {
+// routes fall back to base64 over RPC. `provider` names the service when the
+// Edge engine is speaking, which is not the saved cloud one.
+export async function fetchSpeech(api, text, provider) {
   try {
     const response = await fetch(new URL('api/aha-tutor/tts', document.baseURI), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(provider ? { text, provider } : { text }),
     })
     if (response.ok) return { blob: await response.blob() }
     if (response.status !== 404) {
@@ -94,7 +95,7 @@ export async function fetchSpeech(api, text) {
   } catch (error) {
     if (error?.message && error.message !== 'Failed to fetch') throw error
   }
-  const result = await api.call('tts/speak', { text })
+  const result = await api.call('tts/speak', provider ? { text, provider } : { text })
   return { base64: result.base64, mime: result.mime }
 }
 

@@ -13,6 +13,7 @@ import { STYLE } from '../src/ui/styles.js'
 import { animationDocument, sanitizeSvg } from '../src/ui/sanitize.js'
 import { afterNarration, cloudVoiceOf, createSpeech, splitSentences } from '../src/ui/speech.js'
 import { syncedStarts, themedSvg, wrap } from '../src/ui/video.js'
+import { filterVoices, localeOptions, voiceLabel, voiceName } from '../src/ui/voices.js'
 import { captionSentences, inlinePlain, parseInline, sliceInline, spokenText, texToText } from '../src/ui/board/inline.js'
 
 test('a practice round is summed up in stars, accuracy and streaks, with one next step', () => {
@@ -330,9 +331,45 @@ test('cloud voice keeps the host\'s code and tells a browser that will not play 
   }
 })
 
+test('the free Edge voice asks the host for Edge and keeps its audio out of the cloud voice\'s', async () => {
+  globalThis.Audio = class {
+    play() {
+      queueMicrotask(() => this.onended?.())
+      return Promise.resolve()
+    }
+    pause() {}
+  }
+  try {
+    const calls = []
+    const speech = createSpeech({
+      fetchAudio: async (textValue, provider) => {
+        calls.push([textValue, provider])
+        return { blob: new Blob(['mp3'], { type: 'audio/mpeg' }) }
+      },
+    })
+    const edge = cloudVoiceOf({ tts: { edge: { voice: 'zh-CN-YunxiNeural' } } }, 'edge')
+    const cloud = cloudVoiceOf({ ttsProvider: 'openai', tts: { openai: { voice: 'alloy' } } })
+    speech.configure({ engine: 'edge', edgeVoice: edge, cloudVoice: cloud })
+    await speech.speak('你好').done
+    assert.deepEqual(calls, [['你好', 'edge']], 'the host is told which provider to speak with')
+    speech.prefetch('下一句')
+    await speech.speak('下一句').done
+    assert.deepEqual(calls.map(call => call[1]), ['edge', 'edge'], 'prefetching stays on Edge too')
+    // The cloud engine is asked for its own provider and its own audio.
+    speech.configure({ engine: 'cloud' })
+    await speech.speak('你好').done
+    assert.deepEqual(calls.at(-1), ['你好', undefined])
+    speech.configure({ engine: 'edge' })
+    await speech.speak('你好').done
+    assert.equal(calls.length, 3, 'Edge replays what it already has')
+  } finally {
+    delete globalThis.Audio
+  }
+})
+
 test('a failing voice is turned off for the lesson: at once when only its settings can fix it, else on the second failure in a row', () => {
   const failed = code => ({ completed: false, error: 'it failed', code })
-  for (const code of ['tts-no-key', 'tts-auth', 'tts-address', 'tts-app-id', 'tts-azure', 'tts-request', 'tts-stalled', 'tts-timeout', 'no-credentials']) {
+  for (const code of ['tts-no-key', 'tts-auth', 'tts-address', 'tts-app-id', 'tts-azure', 'tts-edge-voice', 'tts-edge-forbidden', 'tts-request', 'tts-stalled', 'tts-timeout', 'no-credentials']) {
     assert.deepEqual(afterNarration(0, failed(`aha-tutor/${code}`)), { failures: 1, stop: { code, message: 'it failed' } }, code)
   }
   // A system voice without permission or engine names no code.
@@ -351,7 +388,9 @@ test('a failing voice is turned off for the lesson: at once when only its settin
   // The note puts the reason inside one sentence in either language.
   assert.equal(format(zh.voiceDownCloud, { reason: zh['err_tts-no-key'] }), '云端语音用不了：还没有保存这个语音服务的密钥，请先在设置里填写。这节课先静音往下讲。')
   assert.equal(format(zh.voiceDownCloud, { reason: zh['err_tts-stalled'] }), '云端语音用不了：语音服务一直没有回应，请检查服务是否在运行、地址是否正确。这节课先静音往下讲。')
-  assert.equal(format(en.voiceDownSystem, { reason: en.err_speech }), 'The system voice is not working: Reading aloud did not work. Try another system voice, or switch to a cloud voice. This lesson goes on without sound.')
+  assert.equal(format(en.voiceDownSystem, { reason: en.err_speech }), 'The system voice is not working: Reading aloud did not work. Try another system voice, or switch to the free Edge voice. This lesson goes on without sound.')
+  assert.equal(format(zh.voiceDownEdge, { reason: zh['err_tts-edge-forbidden'] }), 'Edge 在线语音用不了：Edge 在线语音拒绝了连接。这个免费服务可能暂时不可用，请稍后再试，或换回系统语音、云端语音。这节课先静音往下讲。')
+  assert.equal(format(en.voiceDownEdge, { reason: en['err_tts-edge-forbidden'] }), 'The free Edge voice is not working: The Edge speech service refused the connection. This free service may be unavailable for now; try again later, or go back to a system or cloud voice. This lesson goes on without sound.')
 })
 
 test('video captions never start a line with closing punctuation', () => {
@@ -486,4 +525,29 @@ test('exported videos write synced ops when their sentence starts', () => {
   assert.deepEqual(syncedStarts(step, [500, 500], 8000), [0, 4000])
   assert.deepEqual(syncedStarts(step, [6000, 500], 8000), [0, 6000], 'an op never starts before the one before it is done')
   assert.equal(syncedStarts({ say: '一。', ops: [{ t: 'p', text: 'a' }] }, [500], 1000), null)
+})
+
+test('the Edge voice library can be searched, filtered by language and read at a glance', () => {
+  const voices = [
+    { id: 'zh-CN-XiaoxiaoNeural', locale: 'zh-CN', gender: 'Female' },
+    { id: 'zh-TW-HsiaoChenNeural', locale: 'zh-TW', gender: 'Female' },
+    { id: 'en-US-AriaNeural', locale: 'en-US', gender: 'Female' },
+    { id: 'en-US-GuyNeural', locale: 'en-US', gender: 'Male' },
+    { id: 'fr-FR-DeniseNeural', locale: 'fr-FR', gender: '' },
+  ]
+  assert.equal(voiceName('zh-CN-XiaoxiaoNeural'), 'Xiaoxiao')
+  assert.equal(voiceName('custom'), 'custom')
+  assert.equal(voiceLabel('zh-CN-XiaoxiaoNeural'), 'Xiaoxiao · zh-CN')
+  assert.equal(voiceLabel(voices[0]), 'Xiaoxiao · zh-CN')
+  assert.equal(voiceName('zh-CN-liaoning-XiaobeiNeural'), 'Xiaobei')
+  assert.equal(voiceLabel('zh-CN-liaoning-XiaobeiNeural'), 'Xiaobei · zh-CN-liaoning')
+
+  // The learner's language comes first, the rest alphabetically.
+  assert.deepEqual(filterVoices(voices, { preferred: 'zh-CN' }).map(voice => voice.id), ['zh-CN-XiaoxiaoNeural', 'zh-TW-HsiaoChenNeural', 'en-US-AriaNeural', 'en-US-GuyNeural', 'fr-FR-DeniseNeural'])
+  assert.deepEqual(filterVoices(voices, { query: 'guy' }).map(voice => voice.id), ['en-US-GuyNeural'])
+  assert.deepEqual(filterVoices(voices, { query: 'female' }).map(voice => voice.id), ['en-US-AriaNeural', 'zh-CN-XiaoxiaoNeural', 'zh-TW-HsiaoChenNeural'])
+  assert.deepEqual(filterVoices(voices, { locale: 'en-US', preferred: 'zh-CN' }).map(voice => voice.id), ['en-US-AriaNeural', 'en-US-GuyNeural'])
+  assert.deepEqual(filterVoices(voices, { query: 'nothing' }), [])
+  assert.deepEqual(localeOptions(voices), [{ locale: 'en-US', count: 2 }, { locale: 'fr-FR', count: 1 }, { locale: 'zh-CN', count: 1 }, { locale: 'zh-TW', count: 1 }])
+  assert.deepEqual(localeOptions([]), [])
 })

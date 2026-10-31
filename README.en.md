@@ -8,10 +8,7 @@
 
 **A private tutor for DeepSeek Harness: say what you want to understand, and it gets to know you, builds a course around you, and teaches it on a handwriting chalkboard while it speaks.**
 
-[![CI](https://github.com/BaronCyrus/dsh-aha-tutor/actions/workflows/ci.yml/badge.svg)](https://github.com/BaronCyrus/dsh-aha-tutor/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/dsh-aha-tutor?logo=npm&label=npm)](https://www.npmjs.com/package/dsh-aha-tutor)
-[![Total npm downloads](https://img.shields.io/npm/d18m/dsh-aha-tutor?logo=npm&label=total%20downloads)](https://www.npmjs.com/package/dsh-aha-tutor)
-[![GitHub stars](https://img.shields.io/github/stars/BaronCyrus/dsh-aha-tutor?style=flat&logo=github&label=stars)](https://github.com/BaronCyrus/dsh-aha-tutor/stargazers)
+[![GitHub](https://img.shields.io/badge/GitHub-Wraindrock%2Fdsh--aha--tutor--fork-111111?logo=github)](https://github.com/Wraindrock/dsh-aha-tutor-fork)
 [![MIT](https://img.shields.io/badge/license-MIT-111111.svg)](LICENSE)
 
 [What it does](#what-it-does) · [Install](#install) · [Quick start](#quick-start) · [Voices](#voices) · [Privacy](#privacy-and-data) · [FAQ](#faq) · [Support](#support-the-author)
@@ -19,6 +16,8 @@
 </div>
 
 <p align="center"><img src="docs/assets/aha-tutor-hero.png" alt="A laptop showing a chalkboard with formulas and a wave, with a glowing light bulb tutor beside it" width="860"></p>
+
+<p align="center"><b>This is a fork of <a href="https://github.com/BaronCyrus/dsh-aha-tutor">BaronCyrus/dsh-aha-tutor</a></b>: the same tutor, plus a key-less <b>Edge voice</b> with the service's full searchable voice library and automatic segmentation of long narration. The instructions below install this fork, not the npm package.</p>
 
 ## What it does
 
@@ -42,11 +41,28 @@ Two sample courses ship with the plugin (harmonic motion and Bayesian thinking, 
 
 You need the **DeepSeek Harness** desktop app (0.2.x, from 0.2.1) with at least one working model. See the [DSH instructions](https://github.com/deepseek-ai/deepseek-harness#run) if you do not have it yet.
 
-1. Open **Plugins** in the desktop app, click **Add plugin** and enter `dsh-aha-tutor` as the package, with the official registry as the source. Within 24 hours of a new release DSH's pnpm holds new versions back; enter an exact version such as `dsh-aha-tutor@1.11.0` then.
+1. Open **Plugins** in the desktop app, click **Add plugin** and enter this fork's GitHub address as the package:
+
+   ```text
+   github:Wraindrock/dsh-aha-tutor-fork
+   ```
+
+   Press **Install**. The repository ships its built `lib/`, so DSH installs it straight from GitHub; there is nothing to build locally.
+
 2. **Quit and reopen** the desktop app. Refreshing the page does not load the plugin's host side.
+
 3. Open **Aha · AI tutor** in the left sidebar (shown as 「开窍 · AI 私人老师」 in Chinese).
 
-Offline: download `dsh-aha-tutor-<version>.tgz` from [GitHub Releases](https://github.com/BaronCyrus/dsh-aha-tutor/releases/latest) and enter its absolute path instead. For your own profiles, `dsh plugin --profile <name> add dsh-aha-tutor@<version>` works; the desktop profile is managed by the app's Plugins page only.
+<details>
+<summary>Offline / your own profile / the upstream original</summary>
+
+- **Offline**: run `pnpm install --frozen-lockfile && pnpm run check` in the repository; the tarball lands in `.artifacts/dsh-aha-tutor-<version>.tgz`. Enter its absolute path instead.
+- **Your own profile**: `dsh plugin --profile <name> add github:Wraindrock/dsh-aha-tutor-fork`; for local changes use `link:<absolute path to the repository>`. Do not use this command for the `desktop` profile; the desktop app's Plugins page owns it.
+- **Want the upstream original?** Use `github:BaronCyrus/dsh-aha-tutor`, or install `dsh-aha-tutor` from the npm registry. npm only has the upstream package, not this fork.
+
+</details>
+
+For updates: a `link:` install is updated by pulling the repository, running `pnpm install --frozen-lockfile && pnpm run check`, and restarting DSH; a GitHub install is updated by installing `github:Wraindrock/dsh-aha-tutor-fork` again and restarting. The version card in settings checks the upstream npm package, so it may report a newer upstream version — do not install `dsh-aha-tutor@<version>` from that hint, or you replace this fork with the upstream package.
 
 ## Quick start
 
@@ -61,9 +77,14 @@ For a single question, use "Explain a concept", "Solve with me" or "Show me visu
 | Option | Notes |
 | --- | --- |
 | **System voice (default, free)** | macOS / Windows voices, selectable in settings; you are told when no voice matches the course language |
+| **Edge voice (free, no key)** | Speaks through Microsoft Edge's online read-aloud service: just a network connection, no account or key. Its library holds every voice the service speaks, searchable by name or language; long narration is split by speaking time into requests of at most about three minutes and joined back into one MP3, so a two-minute or twenty-minute passage works. Spoken sentences are cached locally, so replays make no request. It is an unofficial interface for Edge, so Microsoft may change or stop it |
 | **Cloud voice (optional)** | OpenAI-compatible APIs (including SiliconFlow and others), Volcengine (Doubao), MiniMax and Azure Speech. Keys live in DSH's credential store, are used host-side only and never reach the browser; synthesized audio is cached locally so replays cost nothing |
 
-Only cloud voices can be recorded into exported videos; with a system voice the video has captions and no sound. Board animations appear in videos as a still frame.
+| Edge voice library in settings | A lesson narrated by the Edge voice |
+| --- | --- |
+| <img src="docs/assets/screenshot-voices.png" alt="Narration settings: a search box, language filter and hundreds of Edge voices" width="420"> | <img src="docs/assets/screenshot-edge-classroom.png" alt="The chalkboard classroom, with handwriting, captions and Edge narration" width="420"> |
+
+Only the Edge and cloud voices can be recorded into exported videos; with a system voice the video has captions and no sound. Board animations appear in videos as a still frame.
 
 ## Models
 
@@ -81,7 +102,7 @@ See [SECURITY.md](SECURITY.md).
 
 ## FAQ
 
-**No sound?** Open **Aha → Settings → Narration** and press **Test**. Install a system voice for your language, or use a cloud voice.
+**No sound?** Open **Aha → Settings → Narration** and press **Test**. Install a system voice for your language, use the free Edge voice, or set up a cloud voice.
 
 **A generation failed or looks weak?** Retry, or choose a stronger model for "course design & teaching".
 
@@ -100,7 +121,7 @@ Runs every test, builds the host and browser bundles and packs a tarball into `.
 
 ## License
 
-[MIT](LICENSE) © BaronCyrus. Third-party licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE) © BaronCyrus. Third-party licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This fork is maintained at [Wraindrock/dsh-aha-tutor-fork](https://github.com/Wraindrock/dsh-aha-tutor-fork).
 
 Aha Tutor (开窍) is an independent open-source project, not affiliated with DeepSeek or any other learning product.
 

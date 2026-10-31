@@ -496,7 +496,8 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
   }
   const silent = muted || Boolean(voiceDown)
   const voiceNote = !voiceDown || voiceDown.dismissed ? null
-    : voiceDown.engine === 'cloud' ? t('voiceDownCloud', { reason: errorText(t, voiceDown) }) : t('voiceDownSystem', { reason: errorText(t, voiceDown) })
+    : voiceDown.engine === 'edge' ? t('voiceDownEdge', { reason: errorText(t, voiceDown) })
+      : voiceDown.engine === 'cloud' ? t('voiceDownCloud', { reason: errorText(t, voiceDown) }) : t('voiceDownSystem', { reason: errorText(t, voiceDown) })
 
   return <div ref={root} className="aha-class" data-panel={panelOpen ? 'open' : 'closed'}>
     <div className="aha-classBar">

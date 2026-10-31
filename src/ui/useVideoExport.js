@@ -32,7 +32,9 @@ export function useVideoExport() {
         theme,
         font: settings.boardFont === 'standard' ? 'standard' : 'hand',
         watermark: `${t('appName')} · ${t('appTagline')}`,
-        fetchAudio: settings.voiceEngine === 'cloud' ? text => fetchSpeech(api, text) : null,
+        fetchAudio: settings.voiceEngine === 'cloud' || settings.voiceEngine === 'edge'
+          ? text => fetchSpeech(api, text, settings.voiceEngine === 'edge' ? 'edge' : undefined)
+          : null,
         signal: local.signal,
         onProgress: progress => setState({ percent: Math.round((progress.done / Math.max(1, progress.total)) * 100), phase: progress.phase }),
       })
@@ -45,5 +47,5 @@ export function useVideoExport() {
     }
   }
 
-  return { exporting: state, start, cancel: () => controller.current?.abort(), cloud: settings.voiceEngine === 'cloud' }
+  return { exporting: state, start, cancel: () => controller.current?.abort(), cloud: settings.voiceEngine === 'cloud' || settings.voiceEngine === 'edge' }
 }

@@ -9,9 +9,16 @@ import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { estimateSpeechMs } from '../core/board-script.js'
+import { EDGE_DEFAULT_VOICE, EDGE_VOICES, synthesizeEdge } from './edge-tts.js'
 import { writeFileAtomic } from './store.js'
+import { TtsError } from './tts-error.js'
 
-export const TTS_PROVIDERS = Object.freeze(['openai', 'volcengine', 'minimax', 'azure'])
+export { TtsError } from './tts-error.js'
+
+// `edge` is the odd one out: Microsoft's read-aloud service asks for no key,
+// only a plausible browser request. It is listed last so the keyed services
+// keep their order in the settings form.
+export const TTS_PROVIDERS = Object.freeze(['openai', 'volcengine', 'minimax', 'azure', 'edge'])
 // One request ends within totalMs. A service that sends nothing for quietMs
 // has stalled, and a lesson should not wait out totalMs for it.
 export const TTS_LIMITS = Object.freeze({ totalMs: 45_000, quietMs: 10_000 })
@@ -19,15 +26,6 @@ const MAX_AUDIO_BYTES = 12 * 1024 * 1024
 // Volcengine and MiniMax send the audio inside JSON, as base64 or hex.
 const MAX_JSON_BYTES = 3 * MAX_AUDIO_BYTES
 const CACHE_MAX_BYTES = 300 * 1024 * 1024
-
-export class TtsError extends Error {
-  constructor(code, message, status) {
-    super(message)
-    this.name = 'TtsError'
-    this.code = code
-    this.status = status
-  }
-}
 
 // Field descriptions drive the settings form; `secret` fields are stored
 // with DSH credentials, the rest in plugin preferences.
@@ -56,6 +54,10 @@ export const PROVIDER_FIELDS = Object.freeze({
     { key: 'voice', default: 'zh-CN-XiaoxiaoNeural' },
     { key: 'apiKey', secret: true },
   ],
+  // No secret: the one provider that works without a key.
+  edge: [
+    { key: 'voice', default: EDGE_DEFAULT_VOICE, choices: EDGE_VOICES.map(voice => voice.id) },
+  ],
 })
 
 export function providerDefaults(provider) {
@@ -81,10 +83,13 @@ export function checkEndpoint(value) {
 
 const SENTENCE_END = /([。！？!?；;…]+|\.(?=\s)|\n+)/u
 
+// UTF-8 bytes, roughly: ASCII counts one, everything else three.
+const speechUnits = value => [...value].reduce((sum, char) => sum + (char.charCodeAt(0) > 0x7f ? 3 : 1), 0)
+
 export function splitForTts(content, maxUnits) {
   const textValue = String(content ?? '').trim()
   if (!textValue) return []
-  const units = value => [...value].reduce((sum, char) => sum + (char.charCodeAt(0) > 0x7f ? 3 : 1), 0)
+  const units = speechUnits
   if (units(textValue) <= maxUnits) return [textValue]
   const pieces = textValue.split(SENTENCE_END).reduce((acc, part, index, all) => {
     if (index % 2 === 0) acc.push(part + (all[index + 1] ?? ''))
@@ -123,6 +128,27 @@ export function splitForTts(content, maxUnits) {
 // longer text gets a tenth of its speaking time on top of quietMs.
 export function firstByteMs(text, limits = TTS_LIMITS) {
   return Math.min(limits.totalMs, limits.quietMs + Math.round(estimateSpeechMs(text) / 10))
+}
+
+// Edge has no trouble with long text, but one request should not carry many
+// minutes of audio: a slow service or network costs a step no more than this
+// much, and each request keeps a wide margin under TTS_LIMITS.totalMs. Pieces
+// longer than `maxMs` of speech are split again by the same sentence rules,
+// scaling the unit ceiling so the split follows the speaking time.
+export function splitForSpeech(content, maxMs, maxUnits) {
+  const pieces = []
+  for (const piece of splitForTts(content, maxUnits)) {
+    const ms = estimateSpeechMs(piece)
+    if (ms <= maxMs) {
+      pieces.push(piece)
+      continue
+    }
+    // Scale from this piece's own size, not the ceiling: a short last piece
+    // would otherwise look as if it could not be split at all.
+    const scaled = Math.max(60, Math.floor(speechUnits(piece) * (maxMs / ms)))
+    pieces.push(...splitForTts(piece, scaled))
+  }
+  return pieces
 }
 
 // One request for `text`, resolving with the whole body of a successful
@@ -289,11 +315,20 @@ const synthesizers = {
 }
 
 // Request size limits in "units" (ASCII = 1, other = 3, roughly UTF-8 bytes).
-const CHUNK_UNITS = Object.freeze({ openai: 3800, volcengine: 900, minimax: 9000, azure: 6000 })
+// Edge's own ceiling is 6,000; staying under it leaves room for the SSML.
+const CHUNK_UNITS = Object.freeze({ openai: 3800, volcengine: 900, minimax: 9000, azure: 6000, edge: 4000 })
+// At most about three minutes of speech per Edge request. A two-minute
+// narration stays in one request; a fifteen-minute one is cut into six, each
+// synthesized and downloaded on its own, and the MP3 frames join back up.
+const EDGE_SEGMENT_MS = 180_000
 
-export function createTts({ cacheDir, fetchImpl = globalThis.fetch, getSecret, limits = TTS_LIMITS }) {
+export function createTts({ cacheDir, fetchImpl = globalThis.fetch, getSecret, limits = TTS_LIMITS, edgeSynthesize = synthesizeEdge }) {
   if (typeof getSecret !== 'function') throw new TypeError('createTts needs getSecret')
   let pruning
+
+  // Only a provider with a secret field reads the credential store; asking
+  // for Edge's absent key would be a pointless failure.
+  const needsKey = provider => (PROVIDER_FIELDS[provider] ?? []).some(field => field.secret)
 
   const cacheKey = (provider, config, rate, text) => createHash('sha256')
     .update(JSON.stringify([provider, config.baseUrl ?? '', config.model ?? '', config.voice ?? '', config.cluster ?? '', config.region ?? '', rateNumber(rate), text]))
@@ -315,10 +350,19 @@ export function createTts({ cacheDir, fetchImpl = globalThis.fetch, getSecret, l
         // not cached yet
       }
     }
-    const secret = await getSecret(provider)
-    if (!secret) throw new TtsError('no-key', 'No key saved for this TTS provider')
+    const secret = needsKey(provider) ? await getSecret(provider) : null
+    if (needsKey(provider) && !secret) throw new TtsError('no-key', 'No key saved for this TTS provider')
     const parts = []
-    for (const chunk of splitForTts(content, CHUNK_UNITS[provider])) {
+    // Edge also cuts long speech by speaking time, so no single WebSocket
+    // connection is asked for many minutes of audio.
+    const chunks = provider === 'edge'
+      ? splitForSpeech(content, EDGE_SEGMENT_MS, CHUNK_UNITS.edge)
+      : splitForTts(content, CHUNK_UNITS[provider])
+    for (const chunk of chunks) {
+      if (provider === 'edge') {
+        parts.push(await edgeSynthesize({ text: chunk, config: merged, rate, signal, limits }))
+        continue
+      }
       const send = (url, init, maxBytes) => boundedFetch(fetchImpl, url, init, { text: chunk, signal, limits, maxBytes })
       parts.push(await synthesizers[provider]({ text: chunk, config: merged, secret, rate, send }))
     }

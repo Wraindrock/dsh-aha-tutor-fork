@@ -5,6 +5,7 @@ import { ErrorLine, Spinner } from '../components.jsx'
 import { useApp, useLoad } from '../hooks.js'
 import { browserSpeechAvailable, listVoices, onVoicesChanged, pickVoice } from '../speech.js'
 import { BOARD_FONT } from '../styles.js'
+import { filterVoices, localeOptions, voiceLabel } from '../voices.js'
 
 const PROVIDERS = [['openai', 'providerOpenai'], ['volcengine', 'providerVolcengine'], ['minimax', 'providerMinimax'], ['azure', 'providerAzure']]
 const TEXT_SIZES = [['standard', 'textStandard'], ['large', 'textLarge'], ['larger', 'textLarger']]
@@ -54,6 +55,32 @@ export function SettingsScreen() {
   const provider = settings.ttsProvider ?? 'openai'
   const fields = (settings.fields?.[provider] ?? []).filter(field => !field.secret)
   const providerConfig = settings.tts?.[provider] ?? {}
+  // Edge's full library comes from the host, which asks the service and caches
+  // it. Until (or unless) it arrives, the short built-in list keeps the picker
+  // usable, so an older host and an offline machine still work.
+  const edgeConfig = settings.tts?.edge ?? {}
+  const fallbackVoices = useMemo(() => (settings.fields?.edge?.[0]?.choices ?? ['zh-CN-XiaoxiaoNeural']).map(id => ({
+    id,
+    locale: /^([A-Za-z]{2,3}-[A-Za-z]{2,4})-/u.exec(id)?.[1] ?? '',
+    gender: '',
+  })), [settings.fields])
+  const [edgeLibrary, setEdgeLibrary] = useState(null)
+  const [edgeLibraryFailed, setEdgeLibraryFailed] = useState(false)
+  const [edgeQuery, setEdgeQuery] = useState('')
+  const [edgeLocale, setEdgeLocale] = useState('')
+  const edgeAsked = useRef(false)
+  useEffect(() => {
+    if (settings.voiceEngine !== 'edge' || edgeAsked.current) return
+    edgeAsked.current = true
+    api.call('tts/voices', { provider: 'edge' })
+      .then(result => {
+        if (Array.isArray(result?.voices) && result.voices.length) setEdgeLibrary(result.voices)
+      })
+      .catch(() => setEdgeLibraryFailed(true))
+  }, [settings.voiceEngine, api])
+  const library = edgeLibrary ?? fallbackVoices
+  const shownVoices = useMemo(() => filterVoices(library, { query: edgeQuery, locale: edgeLocale, preferred: lang }), [library, edgeQuery, edgeLocale, lang])
+  const languages = useMemo(() => localeOptions(library), [library])
 
   async function test() {
     setError(null)
@@ -97,7 +124,7 @@ export function SettingsScreen() {
     <section className="aha-card">
       <b>{t('voiceTitle')}</b>
       <div className="aha-row" style={{ gap: 6 }}>
-        {[['browser', 'engineBrowser'], ['cloud', 'engineCloud'], ['off', 'engineOff']].map(([value, label]) => <button key={value} type="button" className="aha-chip" data-active={settings.voiceEngine === value} onClick={() => save('engine', { voiceEngine: value })}>{t(label)}</button>)}
+        {[['browser', 'engineBrowser'], ['edge', 'engineEdge'], ['cloud', 'engineCloud'], ['off', 'engineOff']].map(([value, label]) => <button key={value} type="button" className="aha-chip" data-active={settings.voiceEngine === value} onClick={() => save('engine', { voiceEngine: value })}>{t(label)}</button>)}
       </div>
       <label className="aha-label">{t('voiceRate')} · {settings.voiceRate ?? 1}×
         <input type="range" min="0.5" max="2" step="0.05" value={settings.voiceRate ?? 1} onChange={event => save('engine', { voiceRate: Number(event.currentTarget.value) })} />
@@ -110,8 +137,40 @@ export function SettingsScreen() {
             {(matchingVoices.length ? matchingVoices : voices).map(voice => <option key={voice.id} value={voice.id}>{voice.name} · {voice.lang}{voice.local ? '' : ' ☁'}</option>)}
           </select>
         </label>
-        {browserSpeechAvailable() && !matchingVoices.length ? <p className="aha-hint">{t('noVoiceForLanguage')}</p> : null}
+        {browserSpeechAvailable() && !matchingVoices.length ? <div className="aha-row" style={{ alignItems: 'center', gap: 8 }}>
+          <p className="aha-hint" style={{ margin: 0 }}>{t('noVoiceForLanguage')}</p>
+          <button type="button" className="aha-btn" data-size="sm" onClick={() => save('engine', { voiceEngine: 'edge' })}>{t('useEdgeVoice')}</button>
+        </div> : null}
       </> : null}
+      {settings.voiceEngine === 'edge' ? <div className="aha-col">
+        <div className="aha-spread">
+          <b>{t('edgeVoice')}</b>
+          <span className="aha-hint">{voiceLabel(edgeConfig.voice ?? library[0]?.id ?? '')}</span>
+        </div>
+        <div className="aha-row aha-librarySearch">
+          <input className="aha-input" value={edgeQuery} placeholder={t('searchVoices')} aria-label={t('searchVoices')}
+            onChange={event => setEdgeQuery(event.currentTarget.value)} />
+          <select className="aha-select" style={{ width: 'auto' }} value={edgeLocale} aria-label={t('voiceLanguage')}
+            onChange={event => setEdgeLocale(event.currentTarget.value)}>
+            <option value="">{t('allLanguages')}</option>
+            {languages.map(option => <option key={option.locale} value={option.locale}>{option.locale} · {option.count}</option>)}
+          </select>
+        </div>
+        <div className="aha-voiceList" role="listbox" aria-label={t('edgeVoice')}>
+          {shownVoices.map(voice => {
+            const selected = (edgeConfig.voice ?? library[0]?.id) === voice.id
+            return <button key={voice.id} type="button" role="option" aria-selected={selected} className="aha-btn" data-kind={selected ? 'primary' : 'ghost'} data-size="sm"
+              onClick={() => save('edge-voice', { tts: { edge: { voice: voice.id } } })}>
+              <span className="aha-voiceName">{voiceLabel(voice)}</span>
+              {voice.gender === 'Female' || voice.gender === 'Male' ? <span className="aha-tag">{t(voice.gender === 'Female' ? 'voiceFemale' : 'voiceMale')}</span> : null}
+            </button>
+          })}
+        </div>
+        {shownVoices.length ? <span className="aha-hint">{t('voiceCount', { count: shownVoices.length })}</span> : <p className="aha-hint">{t('noMatchingVoices')}</p>}
+        {edgeLibraryFailed ? <p className="aha-hint">{t('err_tts-edge-voices')}</p> : null}
+        <p className="aha-hint">{t('edgeHint')}</p>
+        <ErrorLine error={errorIn('edge-voice')} reveal />
+      </div> : null}
       {settings.voiceEngine === 'cloud' ? <div className="aha-col">
         <label className="aha-label">{t('cloudProvider')}
           <select className="aha-select" value={provider} onChange={event => save('cloud', { ttsProvider: event.currentTarget.value })}>

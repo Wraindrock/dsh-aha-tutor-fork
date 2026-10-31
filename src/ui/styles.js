@@ -247,6 +247,11 @@ a.aha-btn{text-decoration:none}
 .aha-viewToggle button[aria-pressed=true]{background:var(--aha-surface);color:var(--aha-text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .aha-lesson[data-flash=true],.aha-card[data-flash=true]{animation:aha-flash 1.6s ease}
 .aha-librarySearch .aha-input{flex:1;min-width:0}
+/* The Edge voice library in settings: a scrollable grid of choices. */
+.aha-voiceList{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px;max-height:264px;overflow:auto;padding:6px;border:1px solid var(--aha-border);border-radius:10px;background:var(--aha-surface)}
+.aha-voiceList .aha-btn{justify-content:flex-start;min-width:0}
+.aha-voiceList .aha-tag{flex:0 0 auto;margin-left:auto;font-size:${px(12)}}
+.aha-voiceName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .aha-addMaterials{gap:8px;border-style:dashed}
 /* A lesson's handout (Handout.jsx), on screen and on paper. */
 .aha-handout{display:flex;flex-direction:column;gap:18px;padding:22px 26px;border:1px solid var(--aha-border);border-radius:var(--aha-radius);background:var(--aha-surface);color:var(--aha-text);font-size:${px(15.5)};line-height:${px(24.5)}}

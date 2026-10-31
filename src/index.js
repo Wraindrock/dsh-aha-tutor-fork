@@ -15,6 +15,7 @@ import { createJobs } from './host/jobs.js'
 import { createLearner } from './host/learner.js'
 import { createLessons } from './host/lessons.js'
 import { createLlmPort } from './host/llm.js'
+import { listEdgeVoices } from './host/edge-tts.js'
 import { createPluginManager } from './host/plugin-version.js'
 import { createProjects } from './host/projects.js'
 import { createResearch } from './host/research.js'
@@ -68,6 +69,13 @@ export function apply(ctx) {
     return tts.synthesize({ provider: chosen, config: current.tts?.[chosen] ?? {}, text, rate: 1, signal })
   }
 
+  // The settings page's voice library: Edge lists its voices on the service,
+  // the keyed providers keep their short field lists.
+  async function voices({ provider }) {
+    if (provider !== 'edge') return { provider, voices: [] }
+    return { provider, voices: await listEdgeVoices() }
+  }
+
   async function info(payload) {
     if (typeof payload?.language === 'string') uiLanguage = payload.language.startsWith('zh') ? 'zh-CN' : 'en'
     let version = null
@@ -80,7 +88,7 @@ export function apply(ctx) {
   }
 
   const routes = {
-    ...createRoutes({ courses, lessons, learner, studio, projects, jobs, settings, tts: { speak }, plugin, info, speechInput }),
+    ...createRoutes({ courses, lessons, learner, studio, projects, jobs, settings, tts: { speak, voices }, plugin, info, speechInput }),
     'app/info': payload => info(payload),
     'samples/list': () => samples.list(),
     'samples/import': payload => samples.importSample({ id: payload.id }),

@@ -8,17 +8,16 @@
 
 **给 DeepSeek Harness 装一位私人老师：说出你想弄懂的东西，它先了解你，再为你做一门课，在手写黑板上边写边讲。**
 
-[![CI](https://github.com/BaronCyrus/dsh-aha-tutor/actions/workflows/ci.yml/badge.svg)](https://github.com/BaronCyrus/dsh-aha-tutor/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/dsh-aha-tutor?logo=npm&label=npm)](https://www.npmjs.com/package/dsh-aha-tutor)
-[![npm 总下载量](https://img.shields.io/npm/d18m/dsh-aha-tutor?logo=npm&label=%E6%80%BB%E4%B8%8B%E8%BD%BD%E9%87%8F)](https://www.npmjs.com/package/dsh-aha-tutor)
-[![GitHub Star 数](https://img.shields.io/github/stars/BaronCyrus/dsh-aha-tutor?style=flat&logo=github&label=Star%20%E6%95%B0)](https://github.com/BaronCyrus/dsh-aha-tutor/stargazers)
+[![GitHub](https://img.shields.io/badge/GitHub-Wraindrock%2Fdsh--aha--tutor--fork-111111?logo=github)](https://github.com/Wraindrock/dsh-aha-tutor-fork)
 [![MIT](https://img.shields.io/badge/license-MIT-111111.svg)](LICENSE)
 
-[能做什么](#能做什么) · [安装](#安装) · [三分钟上手](#三分钟上手) · [界面预览](#界面预览) · [使用指南](docs/guide.zh-CN.md) · [隐私](#隐私与数据) · [常见问题](#常见问题) · [支持作者](#支持作者)
+[能做什么](#能做什么) · [安装](#安装) · [三分钟上手](#三分钟上手) · [界面预览](#界面预览) · [语音](#语音) · [使用指南](docs/guide.zh-CN.md) · [隐私](#隐私与数据) · [常见问题](#常见问题) · [支持作者](#支持作者)
 
 </div>
 
 <p align="center"><img src="docs/assets/aha-tutor-hero.png" alt="开窍：笔记本电脑屏幕上是一块写着公式和波形的黑板，灯泡小老师在一旁发光" width="860"></p>
+
+<p align="center"><b>这是 <a href="https://github.com/BaronCyrus/dsh-aha-tutor">BaronCyrus/dsh-aha-tutor</a> 的 fork</b>：保持原有功能，并增加了免密钥的 <b>Edge 在线语音</b>（完整音色库、可搜索）和长讲解自动分段。下面安装的是本 fork，不是 npm 上的上游包。</p>
 
 ## 能做什么
 
@@ -42,23 +41,24 @@
 
 先准备好 **DeepSeek Harness** 桌面版（0.2.1 及以上的 0.2.x 版本），并在 DSH 里配置好至少一个可用的模型。尚未安装 DSH，可查看 [DSH 官方说明](https://github.com/deepseek-ai/deepseek-harness#run)。
 
-1. 打开桌面应用的**插件**页，点击**添加插件**，在**包名或地址**中填入：
+1. 打开桌面应用的**插件**页，点击**添加插件**，在**包名或地址**中填入本 fork 的 GitHub 地址：
 
    ```text
-   dsh-aha-tutor
+   github:Wraindrock/dsh-aha-tutor-fork
    ```
 
-   安装源选择**官方源**，点击**安装**。新版本刚发布的 24 小时内，DSH 的 pnpm 会因为发布冷却期暂缓安装，这时请填入精确版本，例如 `dsh-aha-tutor@1.11.0`。
+   点击**安装**。仓库里已经带了构建好的 `lib/`，DSH 直接从 GitHub 安装，不需要你在本地构建。
 
 2. **完全退出并重新打开** DSH 桌面应用。只刷新页面不会加载 Host 端的新插件。
 
 3. 左侧栏出现 **「开窍 · AI 私人老师」**，点开即可使用。
 
 <details>
-<summary>离线安装 / 自建 profile</summary>
+<summary>离线安装 / 自建 profile / 跟随上游</summary>
 
-- 从 [GitHub Releases](https://github.com/BaronCyrus/dsh-aha-tutor/releases/latest) 下载 `dsh-aha-tutor-<版本>.tgz`，在**包名或地址**中填入它的绝对路径。
-- 自建 profile 可以用 `dsh plugin --profile <name> add dsh-aha-tutor@<版本>`。不要对 `desktop` profile 使用这条命令，桌面版请走插件页。
+- **离线安装**：在仓库里执行 `pnpm install --frozen-lockfile && pnpm run check`，产物是 `.artifacts/dsh-aha-tutor-<版本>.tgz`；在**包名或地址**中填入它的绝对路径即可。
+- **自建 profile**：`dsh plugin --profile <name> add github:Wraindrock/dsh-aha-tutor-fork`；本地改动用 `link:<仓库绝对路径>`。不要对 `desktop` profile 使用这条命令，桌面版请走插件页。
+- **只想用上游原版**：把地址换成 `github:BaronCyrus/dsh-aha-tutor`，或在插件页填 `dsh-aha-tutor` 从 npm 官方源安装。npm 上只有上游包，没有本 fork。
 
 </details>
 
@@ -83,9 +83,14 @@
 | 方式 | 说明 |
 | --- | --- |
 | **系统语音（默认，免费）** | 使用 macOS / Windows 自带的音色，可在设置中挑选；系统没有中文音色时会给出提示 |
+| **Edge 在线语音（免费，无需密钥）** | 用微软 Edge 的在线朗读服务合成，联网即可，不用注册或填密钥；音色库里有三百多个音色，可以按名称或语言搜索，选中后点「试听」就能听；长讲解按朗读时长自动分段（每段约三分钟以内）再拼回一段音频，两分钟、二十分钟的讲解都能用；合成过的语音缓存在本机，重播不再请求。这是 Edge 的一项非公开接口，微软调整服务时可能暂时用不了 |
 | **云端语音（可选）** | 支持 OpenAI 兼容接口（含硅基流动等）、火山引擎（豆包语音）、MiniMax、Azure 语音。密钥保存在 DSH 的凭据库中，只在 Host 端使用，不会传给浏览器；合成过的语音会缓存在本机，重播不再计费 |
 
-导出视频时，只有云端语音能被录进视频；用系统语音导出的视频带字幕、没有声音。黑板上的小动画在视频里以一帧静态画面出现。
+| 设置里的 Edge 音色库 | 用 Edge 语音朗读的课堂 |
+| --- | --- |
+| <img src="docs/assets/screenshot-voices.png" alt="语音设置：搜索框、语言筛选和三百多个可选的 Edge 音色" width="420"> | <img src="docs/assets/screenshot-edge-classroom.png" alt="黑板课堂：手写板书、字幕，以及用 Edge 在线语音逐句朗读" width="420"> |
+
+导出视频时，只有 Edge 在线语音和云端语音能被录进视频；用系统语音导出的视频带字幕、没有声音。黑板上的小动画在视频里以一帧静态画面出现。
 
 ## 模型
 
@@ -105,13 +110,18 @@
 
 ## 更新与卸载
 
-**开窍 → 设置 → 插件版本**可以检查更新，并用 DSH 自带的 pnpm 安装精确的新版本，新版本刚发布也能直接装上。如果你给 DSH 的 pnpm 显式设置了发布冷却期（`minimumReleaseAge`），还没过冷却期的版本会显示「待更新」和可以更新的时间，这是 pnpm 的供应链安全策略，不是失败。更新后需要完全退出并重新打开 DSH。
+**开窍 → 设置 → 插件版本**会检查版本。用 GitHub 地址或 `link:` 安装时，它不会把插件换成 npm 上的上游包：
+
+- `link:` 安装（本地检出）显示「本地开发安装」：在仓库里 `git pull`，执行 `pnpm install --frozen-lockfile && pnpm run check`，再完全退出并重新打开 DSH。
+- GitHub 地址安装：重新在插件页安装 `github:Wraindrock/dsh-aha-tutor-fork`（自建 profile 里再执行一次 `dsh plugin --profile <name> add github:Wraindrock/dsh-aha-tutor-fork`），然后重开 DSH。
+
+设置页的版本检查查的是 npm 上的上游包 `dsh-aha-tutor`，所以上游发版后这里可能提示「发现新版本」；本 fork 的更新方式只有上面两种，不要按提示安装 `dsh-aha-tutor@<版本>`，那会装回上游包。
 
 在桌面应用的**插件**页可以停用或卸载插件。卸载不会删除 `~/.dsh/aha-tutor/` 里的学习数据；不再需要时可以手动删除这个文件夹。
 
 ## 常见问题
 
-**老师没有声音？** 打开 **开窍 → 设置 → 语音讲解**，点**试听**。没有中文音色时，可在系统设置里安装中文语音，或改用云端语音。
+**老师没有声音？** 打开 **开窍 → 设置 → 语音讲解**，点**试听**。没有中文音色时，可在系统设置里安装中文语音，或改用 **Edge 在线语音（免费）**，也可以配置云端语音。
 
 **生成失败或结果不理想？** 点**重试**，或在设置里为「出课与讲课」换一个更强的模型。
 
@@ -130,7 +140,7 @@ pnpm run check
 
 ## 许可
 
-[MIT](LICENSE) © BaronCyrus。第三方组件的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+[MIT](LICENSE) © BaronCyrus。第三方组件的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本 fork 在 [Wraindrock/dsh-aha-tutor-fork](https://github.com/Wraindrock/dsh-aha-tutor-fork) 维护。
 
 「开窍 / Aha Tutor」是独立的开源项目，与 DeepSeek 或其他任何学习产品均无隶属关系。
 

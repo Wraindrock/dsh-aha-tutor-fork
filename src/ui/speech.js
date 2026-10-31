@@ -1,6 +1,8 @@
-// Narration for the whiteboard. Two engines share one interface:
+// Narration for the whiteboard. Three engines share one interface:
 //   browser — the OS voices behind window.speechSynthesis (free, offline)
+//   edge    — MP3 from Microsoft's key-less read-aloud service, host-side
 //   cloud   — MP3 from the host's TTS proxy, played with an <audio> element
+// `edge` and `cloud` play the same way; only the provider the host asks differs.
 // speak() resolves when the narration ends (or is cancelled). Browser speech
 // is queued sentence by sentence: Chromium stops long utterances after ~15 s
 // on some voices, and pause/resume is unreliable on Windows, so pausing
@@ -209,14 +211,14 @@ function browserEngine() {
 }
 
 // The cloud voice the host speaks with, as a key for audio kept in the
-// browser: the service and its settings, which never include a key.
-export function cloudVoiceOf(settings) {
-  const provider = settings?.ttsProvider ?? ''
+// browser: the service and its settings, which never include a key. The Edge
+// engine passes its own provider, since it is not the saved cloud one.
+export function cloudVoiceOf(settings, provider = settings?.ttsProvider ?? '') {
   const config = settings?.tts?.[provider] ?? {}
   return JSON.stringify([provider, Object.keys(config).sort().map(key => [key, config[key]])])
 }
 
-function cloudEngine({ fetchAudio }) {
+function cloudEngine({ fetchAudio, provider }) {
   let session = null
   // Audio by voice (cloudVoiceOf) and text: once the voice changes, a
   // sentence heard before is fetched again in the new voice.
@@ -225,7 +227,7 @@ function cloudEngine({ fetchAudio }) {
   async function load(textValue, voice = '') {
     const key = `${voice}\n${textValue}`
     if (cache.has(key)) return cache.get(key)
-    const promise = fetchAudio(textValue).then(({ blob, base64, mime }) => {
+    const promise = fetchAudio(textValue, provider).then(({ blob, base64, mime }) => {
       if (blob) return URL.createObjectURL(blob)
       const bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0))
       return URL.createObjectURL(new Blob([bytes], { type: mime || 'audio/mpeg' }))
@@ -295,12 +297,21 @@ function cloudEngine({ fetchAudio }) {
   }
 }
 
-// settings: { engine: 'browser' | 'cloud' | 'off', voiceId, rate, language,
-// cloudVoice } — cloudVoice (cloudVoiceOf) is the host's current cloud voice.
+// settings: { engine: 'browser' | 'edge' | 'cloud' | 'off', voiceId, rate,
+// language, cloudVoice, edgeVoice } — each voice (cloudVoiceOf) is a key for
+// the audio of the host's current service.
 export function createSpeech({ fetchAudio }) {
-  const engines = { browser: browserEngine(), cloud: cloudEngine({ fetchAudio }) }
+  const engines = {
+    browser: browserEngine(),
+    edge: cloudEngine({ fetchAudio, provider: 'edge' }),
+    cloud: cloudEngine({ fetchAudio }),
+  }
   let settings = { engine: 'browser', rate: 1 }
   let active = null
+
+  // Edge audio is kept apart from the cloud voice's: both may be configured,
+  // and a sentence heard in one must not replay in the other.
+  const voiceOf = () => (settings.engine === 'edge' ? settings.edgeVoice : settings.cloudVoice)
 
   return {
     configure(next) {
@@ -319,7 +330,9 @@ export function createSpeech({ fetchAudio }) {
       // An engine that throws fails like one whose audio never came: the
       // lesson goes on silently instead of taking the page down with it.
       try {
-        return active.speak(textValue, { ...settings, ...options })
+        // Both audio engines read `cloudVoice`; the key carries its provider,
+        // so an Edge sentence and a cloud sentence never share an entry.
+        return active.speak(textValue, { ...settings, cloudVoice: voiceOf(), ...options })
       } catch (error) {
         console.error(error)
         return { done: Promise.resolve({ completed: false, error: error?.message ?? 'speech' }) }
@@ -327,6 +340,7 @@ export function createSpeech({ fetchAudio }) {
     },
     prefetch(textValue) {
       if (settings.engine === 'cloud') engines.cloud.prefetch(textValue, settings.cloudVoice)
+      else if (settings.engine === 'edge') engines.edge.prefetch(textValue, settings.edgeVoice)
     },
     pause: () => active?.pause(),
     resume: () => active?.resume(),
@@ -337,6 +351,8 @@ export function createSpeech({ fetchAudio }) {
     cancel: () => active?.cancel(),
     dispose() {
       engines.browser.cancel()
+      engines.edge.cancel()
+      engines.edge.clear()
       engines.cloud.cancel()
       engines.cloud.clear()
     },
@@ -350,7 +366,7 @@ export function createSpeech({ fetchAudio }) {
 // permission or engine, or an engine that threw). Other failures (no
 // connection, a rate limit, a server error) may pass, so they stop the voice
 // only when the next step fails too.
-const LASTING_FAILURES = new Set(['tts-no-key', 'tts-auth', 'tts-address', 'tts-app-id', 'tts-azure', 'tts-config', 'tts-request', 'tts-stalled', 'tts-timeout', 'no-credentials', 'speech'])
+const LASTING_FAILURES = new Set(['tts-no-key', 'tts-auth', 'tts-address', 'tts-app-id', 'tts-azure', 'tts-edge-voice', 'tts-edge-forbidden', 'tts-config', 'tts-request', 'tts-stalled', 'tts-timeout', 'no-credentials', 'speech'])
 
 // What one step's narration means for the rest of a lesson. `failures`
 // counts failed narrations in a row; `stop` ({ code, message }) is set when

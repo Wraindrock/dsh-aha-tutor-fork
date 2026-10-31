@@ -93,7 +93,10 @@ export function ttsRoute({ speak }) {
         return failure('invalid', 'Invalid request', 400)
       }
       try {
-        const result = await speak({ text: String(body?.text ?? '').slice(0, 4000), signal: request.signal })
+        // The browser may name a provider; only the host's table decides
+        // whether it exists, and a keyed one still needs its saved key.
+        const provider = typeof body?.provider === 'string' && body.provider ? body.provider : undefined
+        const result = await speak({ text: String(body?.text ?? '').slice(0, 4000), provider, signal: request.signal })
         return new Response(result.audio, { status: 200, headers: { 'content-type': result.mime, 'cache-control': 'no-store' } })
       } catch (error) {
         const known = error?.name === 'TtsError' || error?.name === 'TutorError'

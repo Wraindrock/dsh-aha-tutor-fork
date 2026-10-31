@@ -216,6 +216,14 @@ export function createRoutes({ courses, lessons, learner, studio, projects, jobs
       return { base64: result.audio.toString('base64'), mime: result.mime, cached: result.cached === true }
     },
 
+    // The settings page's voice library. A host that predates it has no
+    // `voices`; the browser then keeps its short built-in list.
+    'tts/voices': async payload => {
+      const provider = typeof payload?.provider === 'string' && payload.provider ? payload.provider : 'edge'
+      if (!tts?.voices) return { provider, voices: [] }
+      return tts.voices({ provider })
+    },
+
     // Voice questions: whether DSH's Voice Input can transcribe now, and the
     // base64 route for hosts without HTTP routes.
     'speech/status': () => speechInput.status(),
