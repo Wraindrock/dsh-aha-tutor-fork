@@ -125,6 +125,13 @@ test('the host row serves the browser channel, HTTP routes and the preset runtim
     const tts = await harness.fetchRoutes['/api/aha-tutor/tts'].fetch(new Request('http://127.0.0.1/api/aha-tutor/tts', { method: 'POST', body: JSON.stringify({ text: 'hi' }) }))
     assert.equal(tts.status, 401, 'no key for the chosen provider yet')
     assert.equal((await tts.json()).error.code, 'aha-tutor/tts-no-key')
+    // The saved Edge voice is the one the host asks the service for. An
+    // unusable name fails at once, before any connection is opened, so this
+    // runs no real service call; the default voice would have been asked for
+    // silently had the picker's choice not reached the request.
+    await call('settings/save', { settings: { voiceEngine: 'edge', tts: { edge: { voice: 'not a voice' } } } })
+    const edge = await harness.fetchRoutes['/api/aha-tutor/tts'].fetch(new Request('http://127.0.0.1/api/aha-tutor/tts', { method: 'POST', body: JSON.stringify({ text: 'hi', provider: 'edge' }) }))
+    assert.equal((await edge.json()).error.code, 'aha-tutor/tts-edge-voice')
 
     assert.ok(getRuntime().studio, 'the preset tools can reach the services')
     const samples = await call('samples/list')

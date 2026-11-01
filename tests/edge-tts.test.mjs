@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { estimateSpeechMs } from '../src/core/board-script.js'
-import { EDGE_DEFAULT_VOICE, EDGE_VOICES, encodeFrame, listEdgeVoices, secMsGec, synthesisUrl } from '../src/host/edge-tts.js'
+import { EDGE_DEFAULT_VOICE, EDGE_VOICES, encodeFrame, listEdgeVoices, secMsGec, ssmlFor, synthesisUrl } from '../src/host/edge-tts.js'
 import { cleanPrefs, createKeyStore, PREF_DEFAULTS } from '../src/host/settings.js'
 import { createTts, PROVIDER_FIELDS, providerDefaults, splitForSpeech, TTS_PROVIDERS } from '../src/host/tts.js'
 
@@ -123,9 +123,11 @@ test('the Edge provider asks for no key, splits long text and caches by voice', 
       secretAsked += 1
       return 'unused'
     },
-    edgeSynthesize: async ({ text, config }) => {
-      calls.push([text, config.voice])
-      return Buffer.from(`EDGE:${text}`)
+    edgeSynthesize: async options => {
+      // What the request carries is what the service will speak: the chosen
+      // ShortName, never an implicit default.
+      calls.push([options.text, options.voice])
+      return Buffer.from(`EDGE:${options.text}`)
     },
   })
   const first = await tts.synthesize({ provider: 'edge', text: '你好', config: { voice: 'zh-CN-YunxiNeural' } })
@@ -137,6 +139,11 @@ test('the Edge provider asks for no key, splits long text and caches by voice', 
   const second = await tts.synthesize({ provider: 'edge', text: '你好', config: { voice: 'en-US-AriaNeural' } })
   assert.equal(second.audio.toString(), 'EDGE:你好')
   assert.deepEqual(calls, [['你好', 'zh-CN-YunxiNeural'], ['你好', 'en-US-AriaNeural']])
+
+  // The picker's voice reaches the SSML, and a host that passes the provider
+  // config instead of `voice` still speaks the chosen one.
+  assert.match(ssmlFor('你好', 'zh-CN-YunjianNeural', 1), /<voice name="zh-CN-YunjianNeural">/u)
+  assert.match(ssmlFor('你好', 'zh-CN-liaoning-XiaobeiNeural', 1), /xml:lang="zh-CN"/u)
 })
 
 test('the Edge voice source is a setting of its own, with its own voice', () => {

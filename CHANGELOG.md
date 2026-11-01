@@ -8,6 +8,10 @@ All notable changes to this plugin are recorded here. Versions follow [SemVer](h
 
 - **Edge online voice, free and without a key**: a fourth voice source in **Settings → Narration**, between the system voice and the cloud voice. It speaks through Microsoft Edge's read-aloud service, host-side only, with no account, key or extra dependency: pick from the service’s full voice library, searchable by name or language and sorted with your own language first, and press **Test**. Long narration is cut by speaking time into requests of at most about three minutes, each synthesized on its own and joined back into one MP3, so a two-minute or twenty-minute passage is safe. Spoken sentences are cached next to the other speech audio, so replaying a lesson makes no request, and exported videos can be narrated with it. The service is an unofficial Edge interface and may change or stop; a failure says so and the lesson goes on, as with any voice.
 
+### Fixed
+
+- **The Edge voice you pick is the one that speaks**: the voice chooser saved the choice, but the host sent every request with the service's default voice, so all of them sounded the same. The chosen voice now travels with each request, including the ones a long narration is split into, and a voice the service will not speak for the text (an English-only voice asked to read Chinese) says which voice it was instead of failing silently. Audio cached in the wrong voice before this fix is no longer replayed for another voice.
+
 ## 1.11.0 - 2026-10-29
 
 ### Changed

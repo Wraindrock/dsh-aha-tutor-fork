@@ -330,8 +330,13 @@ export function createTts({ cacheDir, fetchImpl = globalThis.fetch, getSecret, l
   // for Edge's absent key would be a pointless failure.
   const needsKey = provider => (PROVIDER_FIELDS[provider] ?? []).some(field => field.secret)
 
+  // Everything that changes the sound, by provider. Edge is the one provider
+  // whose voice was once left out of the request itself, so audio spoken in
+  // the default voice sits in the cache under the chosen voice's key; the
+  // version bump keeps such an entry from being played for another voice.
+  const EDGE_CACHE_VERSION = 2
   const cacheKey = (provider, config, rate, text) => createHash('sha256')
-    .update(JSON.stringify([provider, config.baseUrl ?? '', config.model ?? '', config.voice ?? '', config.cluster ?? '', config.region ?? '', rateNumber(rate), text]))
+    .update(JSON.stringify([provider, provider === 'edge' ? EDGE_CACHE_VERSION : 0, config.baseUrl ?? '', config.model ?? '', config.voice ?? '', config.cluster ?? '', config.region ?? '', rateNumber(rate), text]))
     .digest('hex')
     .slice(0, 40)
 
@@ -360,7 +365,10 @@ export function createTts({ cacheDir, fetchImpl = globalThis.fetch, getSecret, l
       : splitForTts(content, CHUNK_UNITS[provider])
     for (const chunk of chunks) {
       if (provider === 'edge') {
-        parts.push(await edgeSynthesize({ text: chunk, config: merged, rate, signal, limits }))
+        // The chosen voice travels with the request: `voice` is what the
+        // settings page saves, and the service speaks the SSML's name, so a
+        // request without it would always sound like the default voice.
+        parts.push(await edgeSynthesize({ text: chunk, voice: merged.voice, rate, signal, limits }))
         continue
       }
       const send = (url, init, maxBytes) => boundedFetch(fetchImpl, url, init, { text: chunk, signal, limits, maxBytes })

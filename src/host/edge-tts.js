@@ -186,12 +186,18 @@ export function synthesisUrl(now = Date.now(), connectionId = randomUUID().repla
 
 const xmlEscape = value => String(value).replace(/[<>&'"]/gu, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[char])
 
-function ssmlFor(text, voice, rate) {
+// The request the service answers with audio, with the voice stated once in
+// the SSML. Exported for the tests: a voice that never reaches this string is
+// a voice the learner picked and never heard.
+export function ssmlFor(text, voice, rate) {
   const lang = /^([A-Za-z]{2,3}-[A-Za-z]{2,4})/u.exec(voice)?.[1] ?? 'en-US'
   const percent = Math.round((Math.min(2, Math.max(0.5, Number(rate) || 1)) - 1) * 100)
   return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${lang}"><voice name="${voice}"><prosody rate="${percent >= 0 ? '+' : ''}${percent}%" pitch="+0Hz">${xmlEscape(text)}</prosody></voice></speak>`
 }
 
+// A ShortName the service accepts, as the settings page lists them. The
+// library keeps regional ids such as "zh-CN-liaoning-XiaobeiNeural", so the
+// optional region segment is part of a valid name.
 function checkVoice(value) {
   const voice = String(value ?? '').trim()
   if (!/^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z0-9-]{2,40}$/u.test(voice)) throw new TtsError('edge-voice', 'That Edge voice name is not valid')
@@ -369,11 +375,16 @@ function audioFromBinary(payload) {
 
 // One turn: open a connection, ask for `text` in `voice`, collect the MP3
 // until the service says the turn ended. `limits` is TTS_LIMITS.
-export function synthesizeEdge({ text, voice = DEFAULT_VOICE, rate = 1, signal, limits }) {
+//
+// Callers that keep the voice in a provider config (the TTS service passes
+// `config` and the spoken rate) reach it through `config.voice`: reading only
+// a top-level `voice` silently spoke every request in the default one.
+export function synthesizeEdge({ text, voice, config, rate = 1, signal, limits }) {
+  const chosenVoice = voice ?? config?.voice ?? DEFAULT_VOICE
   const content = String(text ?? '').trim()
   if (!content) throw new TtsError('empty', 'Nothing to speak')
   if ([...content].reduce((sum, char) => sum + (char.charCodeAt(0) > 0x7f ? 3 : 1), 0) > MAX_TEXT_UNITS) throw new TtsError('too-large', 'That text is too long for one Edge request')
-  const chosen = checkVoice(voice)
+  const chosen = checkVoice(chosenVoice)
   const totalMs = limits?.totalMs ?? 45_000
   const quietMs = limits?.quietMs ?? 10_000
   const connectionId = randomUUID().replaceAll('-', '')
@@ -427,7 +438,10 @@ export function synthesizeEdge({ text, voice = DEFAULT_VOICE, rate = 1, signal, 
           if (settled) return
           quietTimer()
           if (value.includes('Path:turn.end')) {
-            if (!audio.length) return finish(new TtsError('response', 'The Edge speech service returned no audio'))
+            // The service returns an empty turn for a voice it will not speak:
+            // an English-only voice asked to read Chinese, a retired name. The
+            // message names the voice so the learner can pick another one.
+            if (!audio.length) return finish(new TtsError('response', `The Edge speech service returned no audio for ${chosen}`))
             socket.end(encodeFrame(0x8, Buffer.from([0x0F, 0xA0])))
             finish(null, audio)
           }
