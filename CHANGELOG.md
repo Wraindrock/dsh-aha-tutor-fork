@@ -16,6 +16,8 @@ All notable changes to this plugin are recorded here. Versions follow [SemVer](h
 
 ### Fixed
 
+- **The classroom opens again**: a lesson page blanked out with "this page ran into a problem" as soon as it opened. The check result was compared with the check's id while neither existed, which read a property of nothing and took the whole page down with it; found by walking the real app in a browser, and a test now mounts the classroom so a render-time crash of this kind fails before it reaches anyone.
+
 - **The teacher answers the answer**: after a check, the lesson no longer just moves on. A wrong answer is re-taught at the board from what that answer shows the learner believes (named plainly, then the picture that contradicts it, then the right idea); a half-right answer gets exactly the missing piece and no more; a right answer needs no aside, the card says so and the lesson goes on. The follow-up is anchored to the step, kept with the lesson like a raised hand, and the lesson carries on from there. A learner who misses the same question three times is not re-taught a fourth.
 
 - **The Edge voice you pick is the one that speaks**: the voice chooser saved the choice, but the host sent every request with the service's default voice, so all of them sounded the same. The chosen voice now travels with each request, including the ones a long narration is split into, and a voice the service will not speak for the text (an English-only voice asked to read Chinese) says which voice it was instead of failing silently. Audio cached in the wrong voice before this fix is no longer replayed for another voice.

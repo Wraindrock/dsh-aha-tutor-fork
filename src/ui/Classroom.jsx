@@ -522,8 +522,11 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
   const doneGoals = goals ? goals.filter(state => state === 'done').length : 0
   const writingAside = Boolean(writing) || Boolean(asking)
 
-  const currentResult = checkResult?.checkId === check?.id ? checkResult.result : null
-  const currentMove = checkResult?.checkId === check?.id ? checkResult.move : null
+  // Both may be null (no check on screen), and null?.checkId and check?.id are
+  // both undefined, so the ids must be compared only when a result exists.
+  const gradedHere = checkResult && checkResult.checkId === check?.id ? checkResult : null
+  const currentResult = gradedHere?.result ?? null
+  const currentMove = gradedHere?.move ?? null
   const needsCorrection = check?.kind === 'work' && Boolean(currentResult) && !currentResult.correct && Boolean(currentResult.response?.trim())
   // The teacher answers the wrong or half-right answer at the board before
   // the lesson moves on; the button says so instead of just "continue".
