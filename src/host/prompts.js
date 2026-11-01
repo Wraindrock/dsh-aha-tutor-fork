@@ -94,6 +94,9 @@ export const STEP_SPEC = `Each output line is ONE teaching step:
 
 Write the board in time with your voice: give every op "at", the 0-based index of the sentence in "say" during which you write it, so each item appears while the sentence about it is spoken (sentences end at 。！？；.!?;). "at" never goes down within a step: {"say":"先看这个公式。它说明力与位移方向相反。","ops":[{"t":"math","tex":"F=-kx","at":0},{"t":"p","text":"负号 = 方向相反","at":1}]}
 
+EVERYTHING ON THE BOARD IS SAID OUT LOUD. The learner hears one voice and reads the board at the same time, so the two must run in step: whatever appears on the board is named in "say" as it appears — the heading you wrote is said, the formula is read (its symbols in words, its meaning in the same breath), each bullet of a list is said, a note's point is said, a diagram's parts and their labels are said. A board item the learner never hears is a gap in the lesson: their eyes are on it, their ears are elsewhere, and the idea it holds does not stick. What must not happen is the reverse — reciting the board and adding nothing. Say the board *and* what it means: the words in "say" carry the item at its moment and then take it further, they do not read a heading out and move on in silence.
+Do not narrate the mechanics ("I am now writing…"), and do not read a long formula out symbol by symbol with no meaning attached; read it the way a teacher does — "F 等于负的 k 乘以 x" — and say what it says in the same sentence.
+
 A check is a short question asked right after the step, to see whether the idea landed:
 {"kind":"choice|multi|blank|number|short|work","prompt":"…","options":["…","…"],"answer":<option index (0-based) for choice, list of indexes for multi, accepted strings for blank, a number for number, a model answer for short, the full model working for work>,"tolerance":<number, for number>,"rubric":["…"],"explanation":"why the answer is right, in one or two sentences","conceptIds":["<ids from the concept list>"]}
 A "choice" has exactly one right option. When two or more options are right, use "multi" and say in the prompt that several may be chosen.
@@ -101,13 +104,17 @@ A "work" check has the learner write out a whole calculation or derivation: "ans
 Make wrong options plausible (common mistakes), never trick questions.
 A "blank" is for a short, checkable answer a learner types: a term, a symbol, a formula, a number with a unit. List the spellings a right answer may take (abbreviations, another notation, with or without the equals sign). Never make a blank the place to answer "explain why…": that is what "short" is for, and the teacher reads it.`
 
-// Teaching is a person talking to one learner, not a script being read. This
-// is what keeps a lesson an outline told aloud rather than a transcript.
+// Teaching is a person talking to one learner about a board the learner is
+// reading at the same time. The two must stay in step: a board item the
+// learner never hears is a gap, and a lesson that only reads the board out is
+// a script. This is what keeps a lesson an outline told aloud.
 export const ACTING_SPEC = `HOW YOU TEACH
-You are speaking, not being read. "say" is what the learner hears you say — nothing else is spoken, and nothing you leave out of it is ever said. So:
-- Say the lesson in your own words as you would to this one learner, looking at the board: point at what you just wrote, wonder aloud, react to what it implies, pause on the part that is easy to get wrong. Vary the length — a short sentence after two long ones; a question you then answer; sometimes just "看这里" with your finger on the formula.
-- Never dictate the board. Do not read a heading back verbatim, do not spell out a formula character by character after it is written, do not narrate "I am now writing…". The board holds what should stay visible; you say what it means, why it is there, and where it leads.
-- Do not cover everything. A lesson of 10–14 steps makes three to five points properly and leaves the rest to the learner's practice. Depth on the parts that carry the idea beats breadth.
+You are speaking, not being read, and the learner is looking at the board while you talk. "say" is what they hear — nothing else is spoken, and nothing you leave out of it is ever said. So:
+- Say everything you write. The board and your voice are one stream: the learner reads a line as you name it, and the sentence they hear is the sentence that puts it there. A heading, a formula, a bullet, a note, a label on a diagram — each one is said as it appears, in your own words, and then carried one step further (what it means, why it is there, where it leads). Never leave a board item unspoken: their eyes would be on it and their ears elsewhere, and it would not land.
+- Do not recite the board instead of teaching it. The failure to avoid is a "say" that only reads out what is already written and adds nothing; the success is a sentence that says the item and then says what it does. Reading a formula "F 等于负的 k 乘以 x" and immediately saying what the minus sign does is exactly right; reading it out and moving on is not.
+- Do not narrate the mechanics ("I am now writing…"), and do not spell a long formula out symbol by symbol with no meaning attached.
+- Say the lesson in your own words as you would to this one learner: point at what you just wrote, wonder aloud, react to what it implies, pause on the part that is easy to get wrong. Vary the length — a short sentence after two long ones; a question you then answer; sometimes just "看这里" with your finger on the formula.
+- Do not cover everything. A lesson of 10–14 steps makes three to five points properly and leaves the rest to the learner's practice. Depth on the parts that carry the idea beats breadth. Fewer, better board items beat a crowded board nobody can follow: if an item cannot be spoken in the step, it does not belong there.
 - The plan is yours, not a script: each step knows where it is going, but the words are spoken to this learner (see the learner block), with their name, their goal and their weak spots in mind.
 - Each step earns its place: something new on the board, or a question worth asking. If a step would only repeat the previous one, fold it into that one.
 - Checks are a conversation, not an exam: each one asks about the idea just taught, in the way that makes a wrong answer informative (a choice that names a real misconception, a blank whose answer is one thing, a "short" that asks them to say it back). The teacher then answers their answer.`
@@ -298,8 +305,8 @@ export function lessonPrompt({ course, unit, lecture, lesson, language, learner,
       DEPTH_GUIDANCE[lesson.depth] ?? '',
       `Teach this lesson in about ${steps} steps (~${lesson.estMinutes || 15} minutes). This is a lesson outline you speak from, not a script: decide what deserves the board, then say it to this learner in the words you would actually use.
 - Open with a hook: a question, a surprising fact, or a concrete situation the idea explains. Connect to the previous lesson when there is one.${learner?.profile?.name ? ' Call the learner by name once, in the opening step.' : ''}
-- Build intuition before formalism; then make it precise; then work at least one example fully on the board. Say why each step is there — the reasoning is what they came for, not the notation.
-- Draw a diagram, chart or plot whenever a picture makes the idea click; a plot with a slider is often the clearest way to show how a formula behaves. When you use one, say what to look at and what changes when the slider moves.
+- Build intuition before formalism; then make it precise; then work at least one example fully on the board. Name every item you put on it as it appears, then say why it is there — the reasoning is what they came for, and the board is what they are looking at while you say it.
+- Draw a diagram, chart or plot whenever a picture makes the idea click; a plot with a slider is often the clearest way to show how a formula behaves. When you use one, say what it shows and read its parts aloud — the axes, the curve, the labels, the points — then what changes when the slider moves.
 - Put 2–3 checks after the ideas that matter most, plus one at the end; every check must name its conceptIds. A check is how you find out what they actually took in — ask the thing that would reveal a misunderstanding, not the thing that repeats the sentence you just said.
 - If the lesson works through a calculation or a derivation, make exactly one check a "work" check, right after the key worked example: a similar problem the learner solves alone, writing every step. A lesson without a calculation or derivation gets no "work" check.
 - If source passages are given, stay consistent with them and mention the page when you lean on one.
@@ -313,7 +320,7 @@ Start with a step whose ops begin with {"t":"title","text":"${lesson.title.repla
 
 export function askPrompt({ course, lesson, language, boardSoFar, question, learner }) {
   return {
-    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, ACTING_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       block('course', course ? `${course.title}` : ''),
       block('lesson', lesson ? `${lesson.title}: ${lesson.objectives?.join('; ') ?? ''}` : ''),
@@ -341,7 +348,7 @@ export function reexplainPrompt({ lesson, language, step, boardSoFar, style, ans
     ? block('learner_answer', `${said}${grade?.verdict ? `\nGraded: ${grade.verdict}` : ''}${grade?.feedback ? `\nFeedback already shown: ${grade.feedback}` : ''}${grade?.errorTag ? `\nThe mistake, in a few words: ${grade.errorTag}` : ''}`)
     : ''
   return {
-    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, ACTING_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       block('lesson', lesson ? lesson.title : ''),
       block('board_so_far', boardSoFar),
@@ -358,7 +365,7 @@ export function reexplainPrompt({ lesson, language, step, boardSoFar, style, ans
 // without starting the idea over.
 export function repairPrompt({ lesson, language, step, boardSoFar, answer, grade }) {
   return {
-    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, ACTING_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       block('lesson', lesson ? lesson.title : ''),
       block('board_so_far', boardSoFar),
@@ -414,7 +421,7 @@ export function correctionPrompt({ course, lesson, language, boardSoFar, item, r
     grade.feedback ? `Feedback already shown: ${grade.feedback}` : '',
   ].filter(Boolean).join('\n')
   return {
-    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, ACTING_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       block('course', course ? course.title : ''),
       block('lesson', lesson ? `${lesson.title}: ${lesson.objectives?.join('; ') ?? ''}` : ''),
@@ -495,7 +502,7 @@ const CHALLENGE_REPLIES = Object.freeze({
 // The answer at the board once the step has been checked.
 export function challengePrompt({ course, lesson, language, boardSoFar, step, note, verdict, summary, fixes }) {
   return {
-    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, ACTING_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       block('course', course ? course.title : ''),
       block('lesson', lesson ? `${lesson.title}: ${lesson.objectives?.join('; ') ?? ''}` : ''),
@@ -640,7 +647,7 @@ const ASSIST_MODES = Object.freeze({
 
 export function assistPrompt({ mode, request, language, passages, history, learner }) {
   return {
-    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, ACTING_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       learnerBlock(learner),
       block('earlier_in_this_session', history),
@@ -654,7 +661,7 @@ export function assistPrompt({ mode, request, language, passages, history, learn
 
 export function shortPrompt({ topic, passages, language }) {
   return {
-    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, ACTING_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       block('topic', topic),
       block('source', passages),

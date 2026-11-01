@@ -9,7 +9,7 @@ import { BOARD_FONT_FILES } from '../src/core/board-fonts.js'
 import { FONT_PATH, fontRoute, ttsRoute } from '../src/host/http.js'
 import { createJobs } from '../src/host/jobs.js'
 import { createLlmPort, outputBudget, pickEffort } from '../src/host/llm.js'
-import { blueprintPrompt, correctionPrompt, gradePrompt, lessonPrompt, STEP_SPEC } from '../src/host/prompts.js'
+import { ACTING_SPEC, blueprintPrompt, correctionPrompt, gradePrompt, lessonPrompt, STEP_SPEC } from '../src/host/prompts.js'
 import { generateSteps, streamCounter, writingHint } from '../src/host/generate.js'
 import { compareSemver, createPluginManager, findInstall, releaseAgeRefusal, resolveLauncher } from '../src/host/plugin-version.js'
 import { createStore, resolveDshHome } from '../src/host/store.js'
@@ -301,6 +301,22 @@ test('the font route serves only the bundled board fonts, cacheably', async () =
   for (const name of ['../../package.json', 'OFL-Caveat.txt', '', 'wenkai-gb-0.woff2']) {
     assert.equal((await route.fetch(new Request(`http://dsh.local${FONT_PATH}?f=${encodeURIComponent(name)}`))).status, 404, name)
   }
+})
+
+test('everything written on the board is also said out loud', () => {
+  // The learner reads the board and listens at the same time: an item they
+  // never hear is a gap, so both specs state the rule and no spec tells the
+  // model to stay off the board.
+  for (const spec of [STEP_SPEC, ACTING_SPEC]) assert.match(spec, /EVERYTHING ON THE BOARD IS SAID OUT LOUD|Say everything you write/u)
+  assert.match(ACTING_SPEC, /Never leave a board item unspoken/u)
+  // …without swinging back to reciting it and adding nothing.
+  assert.match(ACTING_SPEC, /Do not recite the board instead of teaching it/u)
+  assert.match(ACTING_SPEC, /reading it out and moving on is not/u)
+  assert.doesNotMatch(ACTING_SPEC, /Never dictate the board/u, 'the old wording told the model not to read what it wrote')
+  assert.doesNotMatch(STEP_SPEC, /do not read a heading back/iu)
+  // Every prompt that writes board steps carries the rule.
+  const boardPrompt = correctionPrompt({ course: { title: 'x' }, lesson: { title: 'y' }, language: 'zh-CN', boardSoFar: '', item: { prompt: 'Q', answer: 'A' }, response: 'R', grade: {} })
+  assert.match(boardPrompt.system, /HOW YOU TEACH/u)
 })
 
 test('lesson prompts ask for sentence-timed ops and goal tags', () => {
