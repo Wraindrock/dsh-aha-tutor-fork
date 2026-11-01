@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { checkNeeds, instantGrade } from '../core/check-response.js'
-import { wrongLabel } from '../core/grading.js'
+import { verdictOf } from '../core/answer-grade.js'
 import { ErrorLine } from './components.jsx'
 import { useApp } from './hooks.js'
 import { fixedLines, ITEM_VERDICT_KEYS } from './item-check.js'
@@ -53,59 +52,57 @@ export function ItemCard({ item: asked, language, onResult, onContinue, continue
   const answered = item.kind === 'multi' ? response.length > 0 : item.kind === 'order' ? true : String(response).trim() !== ''
   const ready = answered && (!askConfidence || confidence)
 
-  // The host grades an open answer (short, work) and also reads a typed
-  // answer the key refused: a blank may be right in other words, and a wrong
-  // one still deserves an explanation of that mistake. It also answers a
-  // "work" answer with the first line that went wrong.
-  function askTeacher(item) {
-    return api.call('lesson/grade', {
-      item: { kind: item.kind, prompt: item.prompt, answer: item.answer, rubric: item.rubric, tolerance: item.tolerance, unit: item.unit },
-      response,
-      language,
-    })
-  }
-
+  // Every answer goes to the teacher. Whether it is right, half right or
+  // wrong is a judgement, not a comparison: the same answer may be written
+  // two ways, and half-right is a real place to be. The key is passed along
+  // as what the lesson meant, for the teacher to weigh, never as the verdict.
   async function submit() {
     if (!ready || result || grading) return
     const timeMs = Date.now() - started.current
-    const objective = instantGrade(item, response)
-    let outcome
-    if (checkNeeds(item, objective, response) !== 'none') {
-      setGrading(true)
-      setError(null)
-      try {
-        const graded = await askTeacher(item)
-        // The teacher may find the answer right although the key said no.
-        const correct = item.kind === 'work' || item.kind === 'short'
-          ? graded.verdict === 'correct'
-          : graded.verdict === 'correct' || (objective.correct && graded.verdict !== 'incorrect')
-        outcome = {
-          score: graded.score,
-          correct,
-          partial: !correct && (graded.verdict === 'partial' || graded.score > 0),
-          feedback: graded.feedback,
-          errorTag: graded.errorTag || (correct ? '' : wrongLabel(item, response)),
-          misconception: graded.misconception,
-          gradedBy: 'teacher',
-          ...(item.kind === 'work' ? { wrongStep: graded.wrongStep ?? '', why: graded.why ?? '', fix: graded.fix ?? '' } : {}),
-        }
-      } catch (failure) {
-        // The teacher could not read it: the key's own verdict still stands,
-        // so a lesson never stops on a failed grading call, and the reason is
-        // shown under the answer.
-        if (!objective) {
-          setError(failure)
-          setGrading(false)
-          return
-        }
-        setError(failure)
-        outcome = { score: objective.score, correct: objective.correct, partial: !objective.correct && objective.score > 0, errorTag: wrongLabel(item, response), gradedBy: 'key' }
-      }
+    setGrading(true)
+    setError(null)
+    let graded
+    try {
+      graded = await api.call('lesson/grade', {
+        item: {
+          kind: item.kind,
+          prompt: item.prompt,
+          answer: item.answer,
+          ...(item.options ? { options: item.options } : {}),
+          ...(item.rubric ? { rubric: item.rubric } : {}),
+          ...(item.tolerance !== undefined ? { tolerance: item.tolerance } : {}),
+          ...(item.unit ? { unit: item.unit } : {}),
+          ...(item.explanation ? { explanation: item.explanation } : {}),
+        },
+        response: item.kind === 'choice' || item.kind === 'multi' || item.kind === 'order'
+          ? optionTextOf(item, response)
+          : response,
+        language,
+      })
+    } catch (failure) {
+      // Nothing is guessed in its place: a lesson says the teacher could not
+      // be reached and offers to try again, rather than inventing a verdict.
+      setError(failure)
       setGrading(false)
-    } else {
-      outcome = { score: objective.score, correct: objective.correct, partial: !objective.correct && objective.score > 0, errorTag: objective.correct ? '' : wrongLabel(item, response) }
+      return
     }
-    const full = { ...outcome, response: typeof response === 'string' ? response : undefined, given: response, confidence: confidence ?? undefined, timeMs, hintsUsed: hints }
+    setGrading(false)
+    const verdict = verdictOf(graded)
+    const full = {
+      verdict,
+      score: Number.isFinite(Number(graded.score)) ? Math.min(1, Math.max(0, Number(graded.score))) : verdict === 'correct' ? 1 : verdict === 'partial' ? 0.5 : 0,
+      correct: verdict === 'correct',
+      partial: verdict === 'partial',
+      feedback: graded.feedback ?? '',
+      errorTag: graded.errorTag ?? '',
+      misconception: graded.misconception === true,
+      response: typeof response === 'string' ? response : undefined,
+      given: response,
+      confidence: confidence ?? undefined,
+      timeMs,
+      hintsUsed: hints,
+      ...(item.kind === 'work' ? { wrongStep: graded.wrongStep ?? '', why: graded.why ?? '', fix: graded.fix ?? '' } : {}),
+    }
     setResult(full)
     onResult?.(full)
   }
@@ -170,13 +167,11 @@ export function ItemCard({ item: asked, language, onResult, onContinue, continue
     return next
   })
 
-  const optionState = option => {
-    if (!result) return undefined
-    const expected = Array.isArray(item.answer) ? item.answer : [item.answer]
-    if (expected.includes(option.id)) return 'right'
-    const picked = Array.isArray(response) ? response.includes(option.id) : response === option.id
-    return picked ? 'wrong' : undefined
-  }
+  // After grading, the options are not coloured right or wrong: the teacher's
+  // words say which part was right, and a green/red paint would turn a
+  // reading of an answer into a verdict on it. The pick is still shown, so the
+  // learner can see what they chose beside the teacher's reply.
+  const picked = option => (Array.isArray(response) ? response.includes(option.id) : response === option.id)
 
   const fixed = item.fixed ? fixedLines(t, item) : []
   const fixedTitle = fixed.length ? `${t('fixedWasItem')}\n${fixed.join('\n')}` : ''
@@ -190,9 +185,7 @@ export function ItemCard({ item: asked, language, onResult, onContinue, continue
     {(item.kind === 'choice' || item.kind === 'multi') ? <div className="aha-col aha-options" style={{ gap: 6 }} data-grid={item.options.every(option => option.text.length <= 22)}>
       {item.options.map(option => {
         const selected = item.kind === 'multi' ? response.includes(option.id) : response === option.id
-        const state = optionState(option)
-        return <button key={option.id} type="button" className="aha-option" data-active={selected} disabled={Boolean(result)}
-          style={state === 'right' ? { borderColor: 'var(--aha-ok)' } : state === 'wrong' ? { borderColor: 'var(--aha-bad)' } : undefined}
+        return <button key={option.id} type="button" className="aha-option" data-active={selected} data-picked={result && picked(option) ? 'true' : undefined} disabled={Boolean(result)}
           onClick={() => (item.kind === 'multi' ? toggle(option.id) : setResponse(option.id))}>
           <span className="aha-row" style={{ gap: 8, flexWrap: 'nowrap' }}><b>{option.id.toUpperCase()}.</b><RichText text={option.text} compact /></span>
         </button>
@@ -232,17 +225,23 @@ export function ItemCard({ item: asked, language, onResult, onContinue, continue
 
     <ErrorLine error={error} />
     {result ? <div className="aha-feedback" data-ok={result.correct ? 'true' : result.partial ? undefined : 'false'}>
-      <b>{result.correct ? t('correct') : result.partial ? t('partial') : t('incorrect')}{result.regraded ? t('regraded') : ''}</b>
+      {/* The verdict is the teacher's reading, so it is said in one calm line
+          and the teacher's own words carry the lesson. A grade that names a
+          verdict other than these three (a fixed question's earlier grade)
+          shows its words without forcing it into a box. */}
+      <b>{result.partial ? t('partial') : result.correct ? t('correct') : t('incorrect')}{result.regraded ? t('regraded') : ''}</b>
+      {/* What the teacher said about this answer, then what the question was
+          written to teach: both belong here, and they are not the same thing. */}
       {result.feedback ? <RichText text={result.feedback} compact /> : null}
-      {item.explanation ? <RichText text={item.explanation} compact /> : null}
+      {item.explanation && item.explanation !== result.feedback ? <RichText text={item.explanation} compact /> : null}
       {result.wrongStep ? <div className="aha-wrongStep">
         <span className="aha-hint">{t('wrongStep')}</span>
         <RichText text={result.wrongStep} compact />
         {result.fix ? <><span className="aha-hint">{t('fixedStep')}</span><RichText text={result.fix} compact /></> : null}
       </div> : null}
-      {/* The teacher's own words are above; the key still follows, to compare
-          against, without the "not quite" framing it would carry on its own. */}
-      {!result.correct ? <div className="aha-hint">{result.gradedBy === 'teacher' ? t('keySays', { answer: answerLabel(item).replace(/^✔ /u, '') }) : answerLabel(item)}</div> : null}
+      {/* What the question was written to mean is shown as the reference the
+          teacher judged against, never as the verdict. */}
+      <div className="aha-hint">{t('keySays', { answer: answerLabel(item).replace(/^✔ /u, '') })}</div>
       {onChallenge && doubt === null && check?.status !== 'checking' ? <button type="button" className="aha-itemFlag" onClick={() => setDoubt('')}>🧐 {t('itemChallenge')}</button> : null}
     </div> : null}
 
@@ -288,6 +287,20 @@ export function ItemCard({ item: asked, language, onResult, onContinue, continue
 function ItemFigure({ svg, plot }) {
   const safe = useMemo(() => sanitizeSvg(plot ? plotSvg(plot) : svg), [svg, plot])
   return safe ? <div className="aha-itemFigure" dangerouslySetInnerHTML={{ __html: safe }} /> : null
+}
+
+// The learner's pick in words, so the teacher is told what they chose rather
+// than an option id it cannot see.
+function optionTextOf(item, response) {
+  const text = id => {
+    const found = item.options?.find(entry => entry.id === id)
+    return found ? `${String(id).toUpperCase()}. ${found.text}` : String(id)
+  }
+  if (item.kind === 'choice') return response ? text(response) : ''
+  if (item.kind === 'multi') return (Array.isArray(response) ? response : []).map(text).join('; ')
+  if (item.kind === 'order') return (Array.isArray(response) ? response : []).map(text).join(' → ')
+  if (item.kind === 'number') return String(response)
+  return response
 }
 
 function answerLabel(item) {

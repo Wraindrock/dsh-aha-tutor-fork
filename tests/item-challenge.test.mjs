@@ -5,7 +5,6 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { answersTo, correctEvidence, EVIDENCE_KEPT, itemKey, logEvidence, stateBefore, takeEvidence } from '../src/core/evidence-log.js'
-import { gradeObjective } from '../src/core/grading.js'
 import { newId } from '../src/core/ids.js'
 import { cleanResponse, correctedItem, earlierGrade, fixItem, itemForCheck, normalizeItemVerdict, regrade, responseText } from '../src/core/item-fix.js'
 import { createConceptState } from '../src/core/mastery.js'
@@ -44,29 +43,32 @@ const SHORT = {
 }
 
 test('a check of a question keeps only a fix that fits the answer given', () => {
-  const fixed = normalizeItemVerdict({ verdict: 'wrong', summary: '21 = 3 × 7，不是质数。', explanation: '23 只有两个因数。', item: { ...written(PRIME), answer: 'b', explanation: '23 只有 1 和它本身两个因数。' } }, PRIME)
+  const fixed = normalizeItemVerdict({ verdict: 'wrong', summary: '21 = 3 × 7，不是质数。', explanation: '23 只有两个因数。', item: { ...written(PRIME), answer: 'b', explanation: '23 只有 1 和它本身两个因数。' }, grade: { score: 1, verdict: 'correct' } }, PRIME)
   assert.equal(fixed.verdict, 'wrong')
   assert.deepEqual([fixed.item.id, fixed.item.answer, fixed.item.conceptIds, fixed.item.difficulty], ['i1', 'b', ['cpt_aaaaaaaa'], 2])
   assert.equal(fixed.item.svg, PRIME.svg, 'the figure stays unless the model drew a new one')
-  assert.equal(normalizeItemVerdict({ verdict: 'wrong', item: { ...written(PRIME), answer: 1 } }, PRIME).item.answer, 'b', 'an answer may name its option by index')
+  assert.equal(normalizeItemVerdict({ verdict: 'wrong', item: { ...written(PRIME), answer: 1 }, grade: { score: 1 } }, PRIME).item.answer, 'b', 'an answer may name its option by index')
   assert.equal(correctedItem(PRIME, { ...written(PRIME), answer: 'b', svg: null }).svg, undefined, 'a figure the model removes is gone')
   // A fix that does not fit goes back to the model (generateJson asks once more).
-  assert.throws(() => normalizeItemVerdict({ verdict: 'wrong', item: { ...written(PRIME), kind: 'multi', answer: ['b'] } }, PRIME), /same kind/u)
-  assert.throws(() => normalizeItemVerdict({ verdict: 'wrong', item: { ...written(PRIME), options: ['21', '23'], answer: 1 } }, PRIME), /number of options/u)
-  assert.throws(() => normalizeItemVerdict({ verdict: 'wrong', item: written(PRIME) }, PRIME), /changes nothing/u)
-  assert.throws(() => normalizeItemVerdict({ verdict: 'misgraded', summary: '判错了' }, PRIME), /answer key/u, 'a choice is graded by its key')
+  assert.throws(() => normalizeItemVerdict({ verdict: 'wrong', item: { ...written(PRIME), kind: 'multi', answer: ['b'] }, grade: { score: 0 } }, PRIME), /same kind/u)
+  assert.throws(() => normalizeItemVerdict({ verdict: 'wrong', item: { ...written(PRIME), options: ['21', '23'], answer: 1 }, grade: { score: 0 } }, PRIME), /number of options/u)
+  assert.throws(() => normalizeItemVerdict({ verdict: 'wrong', item: written(PRIME), grade: { score: 0 } }, PRIME), /changes nothing/u)
+  assert.throws(() => normalizeItemVerdict({ verdict: 'wrong', item: { ...written(PRIME), answer: 'b' } }, PRIME), /new "grade"/u, 'the answer is judged again by the teacher')
+  // A picked option is the teacher's judgement too, so it may be misgraded.
+  assert.equal(normalizeItemVerdict({ verdict: 'misgraded', summary: '选 B 的推理是对的', grade: { score: 1 } }, PRIME).verdict, 'misgraded')
   assert.throws(() => normalizeItemVerdict({ summary: '?' }, PRIME), /no verdict/u)
   const right = normalizeItemVerdict({ verdict: 'right', summary: '没错。', item: { ...written(PRIME), answer: 'c' } }, PRIME)
   assert.deepEqual([right.item, right.grade, right.credit, right.summary], [null, null, false, '没错。'])
   // Graded again against the fix.
-  assert.deepEqual(regrade(fixed.item, 'b', fixed), { score: 1, correct: true, partial: false })
+  assert.equal(regrade(fixed.item, 'b', fixed).verdict, 'correct')
+  assert.deepEqual([regrade(fixed.item, 'b', fixed).score, regrade(fixed.item, 'b', fixed).correct], [1, true])
   assert.equal(regrade(PRIME, 'b', right), null, 'a right question keeps its grade')
 })
 
 test('an open answer is graded again, and an unclear question gives the credit', () => {
   const misgraded = normalizeItemVerdict({ verdict: 'misgraded', summary: '你的答案是对的。', grade: { score: 0.9, verdict: 'correct', feedback: '说到了抵消。' } }, SHORT)
   assert.equal(misgraded.item, null)
-  assert.deepEqual(regrade(SHORT, '质量约掉了', misgraded), { score: 0.9, correct: true, partial: false, feedback: '说到了抵消。', errorTag: '' })
+  assert.deepEqual(regrade(SHORT, '质量约掉了', misgraded), { score: 0.9, verdict: 'correct', correct: true, partial: false, feedback: '说到了抵消。', errorTag: '' })
   assert.throws(() => normalizeItemVerdict({ verdict: 'misgraded', summary: '判错了' }, SHORT), /grade/u)
   assert.throws(() => normalizeItemVerdict({ verdict: 'wrong', item: { ...written(SHORT), answer: '重力和惯性都与质量成正比。' } }, SHORT), /grade/u, 'a fixed open question grades the answer again')
   const unclear = normalizeItemVerdict({ verdict: 'unclear', credit: true, summary: '要看是否忽略空气阻力。', item: { ...written(SHORT), prompt: '忽略空气阻力时，为什么单摆的周期与摆球质量无关？' } }, SHORT)
@@ -183,21 +185,22 @@ test('earlier answers to a fixed question are found by where it is kept and grad
   assert.deepEqual([answersTo(progress, null), answersTo({}, key), answersTo(null, key)], [[], [], []])
 
   const fixed = { ...PRIME, answer: 'b' }
-  // A wrong question: its answers take the fixed key's grade either way.
-  assert.deepEqual(earlierGrade(fixed, 'b', { verdict: 'wrong', score: 0 }), { score: 1, correct: true, errorTag: '' })
-  assert.deepEqual(earlierGrade(fixed, 'a', { verdict: 'wrong', score: 1 }), { score: 0, correct: false, errorTag: 'chose A: 21' })
-  assert.equal(earlierGrade(fixed, 'b', { verdict: 'wrong', score: 1 }), null, 'a grade that stays')
-  assert.deepEqual(earlierGrade(fixed, 'z', { verdict: 'wrong', score: 1 }), { score: 0, correct: false, errorTag: 'chose : ' }, 'an option the question no longer has')
+  // Only the teacher's new grade moves an earlier answer: nothing is
+  // recomputed from the key, whatever the kind of question.
+  assert.equal(earlierGrade(fixed, 'b', { verdict: 'wrong', score: 0 }), null, 'no teacher grade, no change')
+  assert.deepEqual(earlierGrade(fixed, 'b', { verdict: 'wrong', score: 0, grade: { score: 1, verdict: 'correct', errorTag: '' } }), { score: 1, correct: true, errorTag: '' })
+  assert.deepEqual(earlierGrade(fixed, 'a', { verdict: 'wrong', score: 1, grade: { score: 0, verdict: 'incorrect', errorTag: '把 21 当成质数' } }), { score: 0, correct: false, errorTag: '把 21 当成质数' })
+  assert.equal(earlierGrade(fixed, 'b', { verdict: 'wrong', score: 1, grade: { score: 1, verdict: 'correct' } }), null, 'a grade that stays')
   // An unclear one: answers only gain.
-  assert.deepEqual(earlierGrade(fixed, 'b', { verdict: 'unclear', score: 0 }), { score: 1, correct: true, errorTag: '' })
-  assert.equal(earlierGrade(fixed, 'a', { verdict: 'unclear', score: 1 }), null)
+  assert.deepEqual(earlierGrade(fixed, 'b', { verdict: 'unclear', score: 0, grade: { score: 1, verdict: 'correct' } }), { score: 1, correct: true, errorTag: '' })
+  assert.equal(earlierGrade(fixed, 'a', { verdict: 'unclear', score: 1, grade: { score: 1, verdict: 'correct' } }), null)
   // Neither of the others changed the question.
-  assert.equal(earlierGrade(fixed, 'b', { verdict: 'misgraded', score: 0 }), null)
-  assert.equal(earlierGrade(fixed, 'b', { verdict: 'right', score: 0 }), null)
+  assert.equal(earlierGrade(fixed, 'b', { verdict: 'misgraded', score: 0, grade: { score: 1, verdict: 'correct' } }), null)
+  assert.equal(earlierGrade(fixed, 'b', { verdict: 'right', score: 0, grade: { score: 1, verdict: 'correct' } }), null)
+  // A multi-select answer takes the teacher's partial credit as given.
   const multi = { kind: 'multi', options: [{ id: 'a', text: '2' }, { id: 'b', text: '3' }, { id: 'c', text: '4' }], answer: ['a', 'c'] }
-  assert.deepEqual(earlierGrade(multi, ['a'], { verdict: 'wrong', score: 1 }), { score: 0.5, correct: false, errorTag: 'wrong' })
-  assert.equal(earlierGrade({ ...multi, answer: [] }, ['a'], { verdict: 'wrong', score: 1 }), null, 'a key it cannot grade by')
-  // Open answers take the grader's new grade, when there is one.
+  assert.deepEqual(earlierGrade(multi, ['a'], { verdict: 'wrong', score: 1, grade: { score: 0.5, verdict: 'partial', errorTag: '漏选' } }), { score: 0.5, correct: false, errorTag: '漏选' })
+  // Written answers take the grader's new grade too.
   assert.deepEqual(earlierGrade(SHORT, '质量约掉了', { verdict: 'wrong', score: 0.2, grade: { score: 0.9, verdict: 'correct', errorTag: '' } }), { score: 0.9, correct: true, errorTag: '' })
   assert.deepEqual(earlierGrade(SHORT, '不知道', { verdict: 'wrong', score: 0.9, grade: { score: 0.1, verdict: 'incorrect', errorTag: '没说抵消' } }), { score: 0.1, correct: false, errorTag: '没说抵消' })
   assert.equal(earlierGrade(SHORT, '不知道', { verdict: 'unclear', score: 0.9, grade: { score: 0.1, verdict: 'incorrect' } }), null)
@@ -222,7 +225,8 @@ function checkingLlm() {
   let verdict = () => ({ verdict: 'right', summary: '没错。', explanation: '这题是对的。' })
   let grader = () => ({ score: 0, verdict: 'incorrect', feedback: '', errorTag: '' })
   const answer = ({ system, user }) => {
-    if (system.includes('You grade open answers')) return JSON.stringify(grader(user))
+    // The teacher reads every answer now, not only the open ones.
+    if (system.includes('You are the teacher who asked this question')) return JSON.stringify(grader(user))
     if (user.includes('multiple-choice questions whose answers')) return JSON.stringify({ questions: [{ prompt: '基础？', options: ['零基础', '学过'] }] })
     if (user.includes('Design the course blueprint')) return JSON.stringify(blueprint)
     if (user.includes('For EACH lesson write')) {
@@ -327,7 +331,8 @@ test('a wrong practice question is fixed where it is kept, the answer graded aga
 
     // The learner picks 23, sure of it, and is told it is wrong; then
     // answers the next question.
-    const told = gradeObjective(prime, 'b')
+    // The teacher read the pick and called it wrong, as the screen showed.
+    const told = { score: 0, correct: false, partial: false }
     const wrongly = { kind: 'practice', score: told.score, confidence: 'sure', hintsUsed: 0, timeMs: 20_000, expectedMs: 60_000, errorTag: 'chose B: 23' }
     const { evidenceId } = await answer(context, { lessonId: first.id, conceptIds: prime.conceptIds, evidence: wrongly })
     assert.match(evidenceId, /^evd_/u)
@@ -335,11 +340,11 @@ test('a wrong practice question is fixed where it is kept, the answer graded aga
     await answer(context, { lessonId: first.id, conceptIds: short.conceptIds, evidence: later })
     assert.deepEqual((await store.readJson(store.paths.progress(courseId), null)).concepts[concept].misconceptions, ['chose B: 23'])
 
-    llm.setVerdict({ verdict: 'wrong', summary: '21 = 3 × 7，不是质数；23 才是。', explanation: '23 只有 1 和 23 两个因数。', item: { kind: 'choice', prompt: PRIME.prompt, options: [{ id: 'a', text: '21' }, { id: 'b', text: '23' }, { id: 'c', text: '25' }], answer: 'b', explanation: '23 只有 1 和它本身两个因数；21 = 3 × 7。', hints: PRIME.hints } })
+    llm.setVerdict({ verdict: 'wrong', summary: '21 = 3 × 7，不是质数；23 才是。', explanation: '23 只有 1 和 23 两个因数。', item: { kind: 'choice', prompt: PRIME.prompt, options: [{ id: 'a', text: '21' }, { id: 'b', text: '23' }, { id: 'c', text: '25' }], answer: 'b', explanation: '23 只有 1 和它本身两个因数；21 = 3 × 7。', hints: PRIME.hints }, grade: { score: 1, verdict: 'correct', feedback: '23 才是质数。' } })
     context.clock.at += 60_000
     const result = await finish(jobs, lessons.challengeItem({ source: { kind: 'practice', courseId, lessonId: first.id, itemId: prime.id }, response: 'b', shown: { score: 0, correct: false }, evidenceId, note: '23 才是质数吧？' }))
     assert.equal(result.verdict, 'wrong')
-    assert.deepEqual(result.result, { score: 1, correct: true, partial: false })
+    assert.deepEqual(result.result, { score: 1, verdict: 'correct', correct: true, partial: false, feedback: '23 才是质数。', errorTag: '' })
     assert.equal(result.summary, '21 = 3 × 7，不是质数；23 才是。')
     assert.equal(result.explanation, '23 只有 1 和 23 两个因数。')
 
@@ -348,9 +353,9 @@ test('a wrong practice question is fixed where it is kept, the answer graded aga
     assert.deepEqual([check.purpose, check.effort], ['teach', 'low'])
     assert.match(check.user, /<learner_answer>\nB\. 23\n/u)
     assert.match(check.user, /<learner_says>\n23 才是质数吧？/u)
-    assert.match(check.user, /<grading>\nThe answer key marked this answer incorrect\./u)
+    assert.match(check.user, /<grading>\nThe teacher graded this answer 0\.00 \(not right\), against the question's own key\./u)
     assert.match(check.user, /<question>\n\{"kind":"choice","prompt":"下列哪个是质数？"/u)
-    assert.doesNotMatch(check.user, /conceptIds|"misgraded/u, 'a choice is graded by its key')
+    assert.doesNotMatch(check.user, /conceptIds/u, 'no bookkeeping reaches the check')
 
     // The stored question is fixed, ids and all; the other one is untouched.
     const [fixedPrime, sameShort] = (await store.readJson(practicePath, null)).items
@@ -387,10 +392,10 @@ test('a wrong practice question is fixed where it is kept, the answer graded aga
     const { evidenceId: shortEvidence } = await answer(context, { lessonId: first.id, conceptIds: short.conceptIds, evidence: { kind: 'practice', score: 0.2, confidence: 'sure', errorTag: '没说抵消' } })
     llm.setVerdict({ verdict: 'misgraded', summary: '你说到了抵消，应该算对。', explanation: '…', grade: { score: 0.9, verdict: 'correct', feedback: '答到了要点。' } })
     const regraded = await finish(jobs, lessons.challengeItem({ source: { kind: 'practice', courseId, lessonId: first.id, itemId: short.id }, response: '质量在两边约掉了', shown: { score: 0.2, correct: false, feedback: '没有提到抵消。' }, evidenceId: shortEvidence }))
-    assert.deepEqual(regraded.result, { score: 0.9, correct: true, partial: false, feedback: '答到了要点。', errorTag: '' })
+    assert.deepEqual(regraded.result, { score: 0.9, verdict: 'correct', correct: true, partial: false, feedback: '答到了要点。', errorTag: '' })
     assert.equal(regraded.item, null)
     const shortCheck = llm.calls.findLast(call => call.user.includes('Decide which is true')).user
-    assert.match(shortCheck, /A grader gave this answer a score of 0\.2 \(incorrect\)\.\nFeedback shown: 没有提到抵消。/u)
+    assert.match(shortCheck, /The teacher graded this answer 0\.20 \(not right\)[\s\S]*Feedback shown: 没有提到抵消。/u)
     assert.match(shortCheck, /"misgraded": the question is right/u)
     assert.deepEqual((await store.readJson(practicePath, null)).items[1], short)
     const entry = (await store.readJson(store.paths.progress(courseId), null)).evidenceLog.find(item => item.id === shortEvidence)
@@ -425,8 +430,15 @@ test('a fixed question grades the earlier answers to it again, and only those', 
     const { evidenceId: three } = await answer(context, { lessonId: first.id, conceptIds: prime.conceptIds, evidence: challenged, item: given(prime, 'b') })
     assert.deepEqual((await store.readJson(store.paths.progress(courseId), null)).evidenceLog.find(entry => entry.id === one).item, { key: `practice:${first.id}:${prime.id}`, response: 'b' })
 
-    llm.setVerdict({ verdict: 'wrong', summary: '23 才是质数。', explanation: '…', item: { kind: 'choice', prompt: PRIME.prompt, options: [{ id: 'a', text: '21' }, { id: 'b', text: '23' }, { id: 'c', text: '25' }], answer: 'b', explanation: '21 = 3 × 7。', hints: PRIME.hints } })
+    // The teacher reads each answer for what it says: B. 23 is prime, A. 21
+    // is not, whatever the old key said.
+    llm.setGrader(user => (/<learner_answer>\nB\. 23/u.test(user)
+      ? { score: 1, verdict: 'correct', feedback: '对，23 是质数。', errorTag: '' }
+      : { score: 0, verdict: 'incorrect', feedback: '21 = 3 × 7。', errorTag: 'chose A: 21' }))
+    llm.setVerdict({ verdict: 'wrong', summary: '23 才是质数。', explanation: '…', item: { kind: 'choice', prompt: PRIME.prompt, options: [{ id: 'a', text: '21' }, { id: 'b', text: '23' }, { id: 'c', text: '25' }], answer: 'b', explanation: '21 = 3 × 7。', hints: PRIME.hints }, grade: { score: 1, verdict: 'correct' } })
     const result = await finish(jobs, lessons.challengeItem({ source: source(prime), response: 'b', shown: { score: 0, correct: false }, evidenceId: three }))
+    // The teacher re-read both earlier answers; only the one it marked wrong
+    // stops being wrong (the 21 it marked right stays right).
     assert.deepEqual([result.result?.correct, result.earlier], [true, 2])
 
     // Every answer to it as if graded against the fixed question the first
@@ -446,7 +458,7 @@ test('a fixed question grades the earlier answers to it again, and only those', 
     assert.deepEqual([log[one].corrected.score, log[two].corrected.score, log[three].corrected.score, log[other].corrected], [0, 1, 0, undefined])
     assert.equal(progress.evidenceLog.filter(entry => entry.corrected).length, 3)
     assert.equal(progress.events.at(-1).earlier, 2)
-    assert.equal(llm.calls.filter(call => call.system.includes('You grade open answers')).length, 0, 'a question with a key needs no grader')
+    assert.ok(llm.calls.some(call => call.system.includes('You are the teacher who asked this question')), 'the earlier answers were read by the teacher')
 
     // An open question fixed: the grader looks again at the latest three
     // earlier answers, against the fixed question.
@@ -458,7 +470,7 @@ test('a fixed question grades the earlier answers to it again, and only those', 
     llm.setVerdict({ verdict: 'wrong', summary: '标准答案写错了。', explanation: '…', item: { ...written(short), answer: '回复力和惯性都与质量成正比，比值与质量无关。' }, grade: { score: 0.9, verdict: 'correct', feedback: '对。' } })
     const open = await finish(jobs, lessons.challengeItem({ source: source(short), response: '回复力与惯性抵消', shown: { score: 0.2, correct: false }, evidenceId: last }))
     assert.equal(open.earlier, 2)
-    const grades = llm.calls.filter(call => call.system.includes('You grade open answers'))
+    const grades = llm.calls.filter(call => call.system.includes('You are the teacher who asked this question') && call.user.includes('比值与质量无关'))
     assert.equal(grades.length, 3, 'the three latest earlier answers only')
     assert.ok(grades.every(call => call.purpose === 'quick' && call.user.includes('比值与质量无关')), 'graded quickly, against the fixed question')
     const after = Object.fromEntries((await store.readJson(store.paths.progress(courseId), null)).evidenceLog.map(entry => [entry.id, entry]))
@@ -481,9 +493,9 @@ test('unit quizzes, library quizzes and review questions are fixed where they ar
     const quiz = (await finish(jobs, quizJob)).quiz
     const sum = quiz.items[0]
     const { evidenceId } = await answer(context, { conceptIds: sum.conceptIds, evidence: { kind: 'quiz', score: 0, confidence: 'sure', errorTag: 'answered 8' } })
-    llm.setVerdict({ verdict: 'wrong', summary: '先乘后加，是 8。', explanation: '$2 + 2 \\times 3 = 2 + 6 = 8$。', item: { ...written(sum), answer: 8, explanation: '先乘后加：$2 + 6 = 8$。' } })
+    llm.setVerdict({ verdict: 'wrong', summary: '先乘后加，是 8。', explanation: '$2 + 2 \\times 3 = 2 + 6 = 8$。', item: { ...written(sum), answer: 8, explanation: '先乘后加：$2 + 6 = 8$。' }, grade: { score: 1, verdict: 'correct' } })
     const fixedQuiz = await finish(jobs, lessons.challengeItem({ source: { kind: 'quiz', courseId, unitId: unit.id, itemId: sum.id }, response: '8', shown: { score: 0, correct: false }, evidenceId }))
-    assert.deepEqual(fixedQuiz.result, { score: 1, correct: true, partial: false })
+    assert.deepEqual(fixedQuiz.result, { score: 1, verdict: 'correct', correct: true, partial: false, feedback: '', errorTag: '' })
     const storedQuiz = await store.readJson(store.paths.unitQuiz(courseId, unit.id), null)
     assert.deepEqual([storedQuiz.items[0].answer, storedQuiz.items[0].fixed.was.answer], [8, 12])
     assert.ok(fixedQuiz.mastery, 'a quiz answer is evidence too')
@@ -491,7 +503,7 @@ test('unit quizzes, library quizzes and review questions are fixed where they ar
     // A quiz from the library: fixed in its deck; it was never evidence.
     const deck = { id: newId('dck'), kind: 'quiz', title: '偶数速测', language: 'zh-CN', items: [{ id: 'i1', kind: 'multi', prompt: '哪些是偶数？', explanation: '', hints: [], difficulty: 1, conceptIds: [], options: [{ id: 'a', text: '2' }, { id: 'b', text: '3' }, { id: 'c', text: '4' }], answer: ['a'] }], createdAt: new Date(T0).toISOString() }
     await store.writeJson(store.paths.item('decks', deck.id), deck)
-    llm.setVerdict({ verdict: 'wrong', summary: '4 也是偶数。', explanation: '…', item: { ...written(deck.items[0]), answer: ['a', 'c'] } })
+    llm.setVerdict({ verdict: 'wrong', summary: '4 也是偶数。', explanation: '…', item: { ...written(deck.items[0]), answer: ['a', 'c'] }, grade: { score: 1, verdict: 'correct' } })
     const fixedDeck = await finish(jobs, lessons.challengeItem({ source: { kind: 'deck', deckId: deck.id, itemId: 'i1' }, response: ['a', 'c'], shown: { score: 0, correct: false } }))
     assert.deepEqual([fixedDeck.result.correct, fixedDeck.mastery], [true, null])
     assert.match(llm.calls.findLast(call => call.user.includes('Decide which is true')).user, /<scope>\n偶数速测\n/u)
@@ -513,7 +525,7 @@ test('unit quizzes, library quizzes and review questions are fixed where they ar
         : (await store.readJson(store.paths.practice(courseId, entry.source.lessonId), null)).items.find(item => item.id === entry.source.itemId)
       assert.deepEqual(kept, entry.item, `${entry.source.kind} names where its question is kept`)
     }
-    llm.setVerdict({ verdict: 'wrong', summary: '先乘后加，是 14。', explanation: '…', item: { ...written(check), answer: 14 } })
+    llm.setVerdict({ verdict: 'wrong', summary: '先乘后加，是 14。', explanation: '…', item: { ...written(check), answer: 14 }, grade: { score: 1, verdict: 'correct' } })
     const fixedCheck = await finish(jobs, lessons.challengeItem({ source: { kind: 'check', courseId, lessonId: second.id, stepId: 's3' }, response: '14', shown: { score: 0, correct: false }, evidenceId: reviewEvidence }))
     assert.equal(fixedCheck.result.correct, true)
     const fixedBoard = await store.readJson(store.paths.board(courseId, second.id), null)

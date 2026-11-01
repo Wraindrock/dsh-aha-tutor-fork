@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { checkNeeds, coachMove } from '../src/core/check-response.js'
+import { normalizeGrade, verdictOf, VERDICT_KEYS } from '../src/core/answer-grade.js'
+import { coachMove } from '../src/core/check-response.js'
 import { applyEvidence, createConceptState, masteryLevel, masteryPercent, masteryStage, recommendNext, stageForPercent, summarizeForPrompt } from '../src/core/mastery.js'
 import { createCard, dueCards, gradeFromScore, review } from '../src/core/srs.js'
-import { gradeObjective, normalizeAnswerText, parseAnswerNumber } from '../src/core/grading.js'
 
 test('a confident correct answer raises mastery more than a lucky guess', () => {
   const base = createConceptState('cpt_a', 'limits')
@@ -89,64 +89,34 @@ test('SM-2 review intervals grow with good answers and reset on again', () => {
   assert.equal(gradeFromScore(0.9, 'guess'), 'hard')
 })
 
-test('objective grading handles choices, partial multi-select, numbers and blanks', () => {
-  assert.equal(gradeObjective({ kind: 'choice', answer: 'b' }, 'b').correct, true)
-  const multi = gradeObjective({ kind: 'multi', answer: ['a', 'c'] }, ['a', 'b'])
-  assert.equal(multi.correct, false)
-  assert.equal(multi.score, 0)
-  assert.equal(gradeObjective({ kind: 'multi', answer: ['a', 'c'] }, ['a']).score, 0.5)
-  assert.equal(gradeObjective({ kind: 'number', answer: 9.81, tolerance: 0.05 }, '9.8').correct, true)
-  assert.equal(gradeObjective({ kind: 'number', answer: 0.5 }, '1/2').correct, true)
-  assert.equal(gradeObjective({ kind: 'number', answer: 0.25 }, '25%').correct, true)
-  assert.equal(gradeObjective({ kind: 'blank', answer: ['Photosynthesis', '光合作用'] }, ' 光合作用。').correct, true)
-  assert.equal(gradeObjective({ kind: 'blank', answer: ['ＡＢＣ'] }, 'abc').correct, true)
-  assert.equal(gradeObjective({ kind: 'order', answer: ['a', 'b', 'c'] }, ['a', 'c', 'b']).score, 0.33)
-  assert.equal(gradeObjective({ kind: 'short', answer: 'x' }, 'x').gradable, false)
-  assert.equal(normalizeAnswerText('  Hello，World！ '), 'hello,world')
+test('a grade is the teacher\'s judgement, kept in one shape', () => {
+  // The verdict is what the teacher said; a model that only gives a score
+  // still lands somewhere honest, and "partly right" survives as itself.
+  assert.equal(verdictOf({ verdict: 'partial' }), 'partial')
+  assert.equal(verdictOf({ score: 1 }), 'correct')
+  assert.equal(verdictOf({ score: 0.55 }), 'partial')
+  assert.equal(verdictOf({ score: 0 }), 'incorrect')
+  assert.equal(verdictOf({}), 'incorrect', 'no judgement at all never reads as right')
+  assert.equal(verdictOf({ verdict: 'maybe' }), 'incorrect', 'an invented verdict is not taken')
+
+  // "Half right" is a real outcome: a score and two flags that stay apart.
+  const partial = normalizeGrade({ verdict: 'partial', score: 0.5, feedback: '方向对了，大小漏了单位。', errorTag: '缺单位' }, { gave: 'kT' })
+  assert.deepEqual(
+    { verdict: partial.verdict, score: partial.score, correct: partial.correct, partial: partial.partial, given: partial.given },
+    { verdict: 'partial', score: 0.5, correct: false, partial: true, given: 'kT' },
+  )
+  assert.equal(partial.feedback, '方向对了，大小漏了单位。')
+  // A terse model answer still yields a usable grade.
+  const terse = normalizeGrade({ verdict: 'correct' })
+  assert.deepEqual([terse.score, terse.correct, terse.partial, terse.feedback], [1, true, false, ''])
+  assert.equal(normalizeGrade({ verdict: 'incorrect', score: 12 }).score, 1, 'a score outside 0..1 is clamped')
+  // A written-out working names the line that went wrong.
+  const work = normalizeGrade({ verdict: 'partial', score: 0.4, wrongStep: '$x=2$', why: '开平方只取正根', fix: '$x=\\pm 2$' })
+  assert.deepEqual([work.wrongStep, work.fix], ['$x=2$', '$x=\\pm 2$'])
+  assert.equal(VERDICT_KEYS.partial, 'partial')
 })
 
-test('a typed answer counts when it is the same answer written differently', () => {
-  const formula = { kind: 'blank', answer: ['-kx', '−kx', '-k x', '−k x', '-k*x'] }
-  // The key as written, and the same formula typed by a learner.
-  for (const given of ['-kx', '-k x', '−kx', '− k x', '（-kx）', 'F = -kx', 'F=-kx']) {
-    assert.equal(gradeObjective(formula, given).correct, true, given)
-  }
-  // A different formula is still wrong: leniency is not guessing.
-  for (const given of ['k x', 'kx', 'F=kx', '']) assert.equal(gradeObjective(formula, given).correct, false, given)
-  assert.equal(gradeObjective({ kind: 'blank', answer: ['光合作用'] }, '光合作用。').correct, true)
-  assert.equal(gradeObjective({ kind: 'blank', answer: ['Photosynthesis'] }, 'photo synthesis').correct, true)
-  assert.equal(gradeObjective({ kind: 'blank', answer: ['Photosynthesis'] }, 'respiration').correct, false)
-  // A number typed with its unit is that number; a second figure is not.
-  assert.equal(gradeObjective({ kind: 'number', answer: 4 }, '4 N').correct, true)
-  assert.equal(gradeObjective({ kind: 'number', answer: 4 }, '4牛').correct, true)
-  assert.equal(gradeObjective({ kind: 'number', answer: 0.5 }, '0.5 s').correct, true)
-  assert.equal(gradeObjective({ kind: 'number', answer: 9.81, tolerance: 0.05 }, '9.8 m/s²').correct, true)
-  assert.equal(gradeObjective({ kind: 'number', answer: 4 }, '4 + 5').correct, false)
-  assert.equal(gradeObjective({ kind: 'number', answer: 4 }, '5').correct, false)
-  assert.equal(parseAnswerNumber('12.5 cm'), 12.5)
-  assert.ok(Number.isNaN(parseAnswerNumber('two')))
-})
-
-test('an answer the key refused is read by the teacher, a picked option is not', () => {
-  const wrong = { correct: false, score: 0, gradable: true }
-  // Typed answers may be right in words the key does not list, and a wrong one
-  // still deserves an explanation of that mistake.
-  assert.equal(checkNeeds({ kind: 'short' }, wrong, 'something'), 'grade')
-  assert.equal(checkNeeds({ kind: 'work' }, wrong, 'something'), 'grade')
-  // A typed answer the key refused is read by the teacher (a blank may be
-  // right in other words); a chosen option is settled by the key alone.
-  assert.equal(checkNeeds({ kind: 'blank' }, wrong, 'something'), 'coach')
-  assert.equal(checkNeeds({ kind: 'number' }, wrong, '4'), 'none')
-  // A pick is unambiguous, and the right answer needs no review.
-  assert.equal(checkNeeds({ kind: 'choice' }, wrong, 'a'), 'none')
-  assert.equal(checkNeeds({ kind: 'multi' }, wrong, ['a']), 'none')
-  assert.equal(checkNeeds({ kind: 'blank' }, { correct: true, score: 1, gradable: true }, '-kx'), 'none')
-  assert.equal(checkNeeds({ kind: 'short' }, { correct: true, score: 1 }, 'x'), 'grade', 'a written answer is always read')
-  assert.equal(checkNeeds({ kind: 'blank' }, wrong, '   '), 'none')
-  assert.equal(checkNeeds({ kind: 'blank' }, { gradable: false }, 'x'), 'none')
-})
-
-test('the teacher follows up the answer that was given', () => {
+test('the follow-up follows the teacher\'s verdict, not a comparison', () => {
   const wrong = { score: 0, correct: false, partial: false }
   const partial = { score: 0.5, correct: false, partial: true }
   const right = { score: 1, correct: true, partial: false }

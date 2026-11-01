@@ -17,8 +17,9 @@ import { filterVoices, localeOptions, voiceLabel, voiceName } from '../src/ui/vo
 import { captionSentences, inlinePlain, parseInline, sliceInline, spokenText, texToText } from '../src/ui/board/inline.js'
 
 test('a practice round is summed up in stars, accuracy and streaks, with one next step', () => {
-  const round = sessionStats([{ score: 1, correct: true }, { score: 1, correct: true }, { score: 0.5, correct: false }, { score: 1, correct: true }])
-  assert.deepEqual(round, { answered: 4, correct: 3, accuracy: 0.875, stars: 2, streak: 1, bestStreak: 2 })
+  // A partly right answer is counted as itself, not rounded into either end.
+  const round = sessionStats([{ score: 1, correct: true }, { score: 1, correct: true }, { score: 0.5, correct: false, partial: true }, { score: 1, correct: true }])
+  assert.deepEqual(round, { answered: 4, correct: 3, partial: 1, accuracy: 0.875, stars: 2, streak: 1, bestStreak: 2 })
   assert.equal(sessionStats([{ score: 1, correct: true }]).stars, 3)
   assert.equal(sessionStats([]).stars, 1, 'finishing earns a star')
   assert.deepEqual(nextStepFor({ action: 'remediate' }, { lessonId: 'les_a' }), { kind: 'relearn', lessonId: 'les_a' })

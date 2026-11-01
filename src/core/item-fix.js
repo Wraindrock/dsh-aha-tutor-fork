@@ -1,22 +1,19 @@
 // Fixing a practice or quiz question the learner caught out. A model that
-// thinks first checks the question, its answer key and the grading of the
-// learner's answer; this module keeps what it found usable, writes the fix
-// into the stored question (remembering what each changed part first said)
-// and grades the answer again against the fixed question.
+// thinks first checks the question, what it was written to mean, and the
+// judging of the learner's answer; this module keeps what it found usable,
+// writes the fix into the stored question (remembering what each changed part
+// first said), and carries the teacher's new judgement of the answer against
+// the fixed question. Nothing here decides a grade itself.
 
+import { verdictOf } from './answer-grade.js'
 import { normalizeItem, text } from './course-model.js'
-import { gradeObjective, OBJECTIVE_KINDS, wrongLabel } from './grading.js'
 
 // wrong: the question or its key has a mistake; unclear: it depends on a
 // convention it does not state; misgraded: a question graded by the model
 // was right but the answer was graded wrongly; right: all of it was right.
 export const ITEM_VERDICTS = Object.freeze(['wrong', 'unclear', 'misgraded', 'right'])
-// Answers a model grades; the others are graded by their answer key.
-export const MODEL_GRADED = Object.freeze(['short', 'work'])
 // What a fix may change, in the order the original is shown.
 const FIELDS = ['prompt', 'options', 'answer', 'tolerance', 'unit', 'explanation', 'hints', 'rubric', 'figure']
-
-const modelGraded = item => MODEL_GRADED.includes(item?.kind)
 
 // The learner's answer as the item takes it: an option id, a list of them,
 // or text. Anything else is no answer.
@@ -49,15 +46,15 @@ export function itemForCheck(item) {
 }
 
 // The grade a model gives an open answer, in the shape lesson/grade returns.
-function normalizeGrade(raw, kind) {
+function normalizeGrade(raw) {
   if (!raw || typeof raw !== 'object' || !Number.isFinite(Number(raw.score))) return null
   const score = Math.min(1, Math.max(0, Number(raw.score)))
   return {
     score,
-    verdict: ['correct', 'partial', 'incorrect'].includes(raw.verdict) ? raw.verdict : score >= 0.8 ? 'correct' : score >= 0.4 ? 'partial' : 'incorrect',
+    verdict: verdictOf(raw),
     feedback: text(raw.feedback, 1200),
     errorTag: text(raw.errorTag, 80),
-    ...(kind === 'work' ? { wrongStep: text(raw.wrongStep, 400), why: text(raw.why, 400), fix: text(raw.fix, 400) } : {}),
+    ...(raw.wrongStep !== undefined ? { wrongStep: text(raw.wrongStep, 400), why: text(raw.why, 400), fix: text(raw.fix, 400) } : {}),
   }
 }
 
@@ -102,7 +99,6 @@ function changedParts(old, next) {
 export function normalizeItemVerdict(raw, item) {
   const verdict = ITEM_VERDICTS.includes(raw?.verdict) ? raw.verdict : null
   if (!verdict) throw new Error('the check names no verdict')
-  if (verdict === 'misgraded' && !modelGraded(item)) throw new Error('a choice, multi, blank, number or order question is graded by its answer key: when the key misjudged the answer, the verdict is "wrong" with the key corrected in "item"')
   const summary = text(raw?.summary ?? raw?.reason, 400)
   const explanation = text(raw?.explanation, 2000)
   const credit = verdict === 'unclear' && raw?.credit === true
@@ -112,9 +108,13 @@ export function normalizeItemVerdict(raw, item) {
     if (!fixed) throw new Error(`a "${verdict}" verdict needs the whole corrected question in "item": the same kind, the same number of options`)
     if (!Object.keys(changedParts(item, fixed)).length) throw new Error('the corrected question in "item" changes nothing')
   }
-  const grade = modelGraded(item) && verdict !== 'right' && !credit ? normalizeGrade(raw?.grade, item.kind) : null
-  if (modelGraded(item) && verdict !== 'right' && !credit && !grade) throw new Error('give the new "grade" of the learner\'s answer against the corrected question')
-  return { verdict, summary, explanation, item: fixed, credit, grade }
+  // Every answer is the teacher's judgement now, so a check that finds the
+  // answer wrongly graded says so and grades it again, whatever its kind. A
+  // fixed question needs that new grade too: the answer was judged against
+  // the question as it was, and only the teacher can judge it again.
+  const graded = verdict !== 'right' && !credit && raw?.grade !== undefined ? normalizeGrade(raw.grade) : null
+  if (verdict !== 'right' && !credit && !graded) throw new Error('give the new "grade" of the learner\'s answer against the corrected question')
+  return { verdict, summary, explanation, item: fixed, credit, grade: graded }
 }
 
 // The stored question with a fix applied. It keeps its id and concepts, and
@@ -127,43 +127,33 @@ export function fixItem(stored, next, { at = new Date().toISOString() } = {}) {
   return { ...next, id: stored.id, conceptIds: stored.conceptIds ?? next.conceptIds ?? [], fixed: { was, at: note?.at ?? at } }
 }
 
-// The answer graded again after a check: against the fixed question, or
-// with the model's new grade for an open answer; an answer that is right
-// under another reasonable reading of an unclear question counts as right.
-// Null when nothing about the grade changes (a "right" verdict, or an open
-// answer the model did not grade again).
+// The answer graded again after a check: with the model's new grade against
+// the fixed question, or the credit an unclear question gives. Only the
+// teacher grades: what an answer is worth is a judgement (see
+// core/answer-grade.js), never a comparison against the key.
+// Null when nothing about the grade changes: a "right" verdict, or an open
+// answer the model did not grade again.
 export function regrade(item, response, checked) {
   if (checked.verdict === 'right') return null
   if (checked.credit) return { score: 1, correct: true, partial: false, errorTag: '' }
-  if (OBJECTIVE_KINDS.includes(item.kind)) {
-    const graded = gradeObjective(item, response)
-    return { score: graded.score, correct: graded.correct, partial: !graded.correct && graded.score > 0 }
-  }
   if (!checked.grade) return null
-  const { verdict, ...grade } = checked.grade
-  return { ...grade, correct: verdict === 'correct', partial: verdict === 'partial' }
+  const verdict = verdictOf(checked.grade)
+  return { ...checked.grade, verdict, correct: verdict === 'correct', partial: verdict === 'partial' }
 }
 
-// An earlier answer to a question a check fixed, graded against the fixed
-// question: by its key, or with grade, the grader's new grade of an open
-// answer. score: what it was given. A wrong question's answers take the new
+// An earlier answer to a question a check fixed, graded again with `grade`,
+// the teacher's new grade of that answer against the fixed question. score:
+// what it was given at the time. A wrong question's answers take the new
 // grade either way; an unclear one's only gain (an answer marked wrong may
 // have been right under the reading the question allowed then). Returns
-// { score, correct, errorTag }, or null when the grade stays.
+// { score, correct, errorTag }, or null when the grade stays — including when
+// no new grade was given, since the machine no longer grades anything itself.
 export function earlierGrade(item, response, { verdict, score, grade = null }) {
   if (verdict !== 'wrong' && verdict !== 'unclear') return null
-  let next
-  if (OBJECTIVE_KINDS.includes(item.kind)) {
-    const answer = cleanResponse(item, response)
-    const graded = gradeObjective(item, answer)
-    if (!graded.gradable) return null
-    next = { score: graded.score, correct: graded.correct, errorTag: graded.correct ? '' : wrongLabel(item, answer) }
-  } else {
-    if (!grade || !Number.isFinite(Number(grade.score))) return null
-    const value = Math.min(1, Math.max(0, Number(grade.score)))
-    const correct = grade.verdict ? grade.verdict === 'correct' : value >= 0.8
-    next = { score: value, correct, errorTag: correct ? '' : text(grade.errorTag, 80) }
-  }
+  if (!grade || !Number.isFinite(Number(grade.score))) return null
+  const value = Math.min(1, Math.max(0, Number(grade.score)))
+  const correct = verdictOf(grade) === 'correct'
+  const next = { score: value, correct, errorTag: correct ? '' : text(grade.errorTag, 80) }
   const before = Math.min(1, Math.max(0, Number(score) || 0))
   if ((verdict === 'unclear' && next.score <= before) || Math.abs(next.score - before) < 1e-6) return null
   return next

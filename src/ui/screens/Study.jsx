@@ -229,6 +229,7 @@ function PracticeSummary({ set, stats, context, after, recommendation, courseId,
   return <div className="aha-card aha-summary">
     <div className="aha-stars" role="img" aria-label={t('starsLabel', { count: stats.stars })}>{'★'.repeat(stats.stars)}<span>{'★'.repeat(3 - stats.stars)}</span></div>
     <b>{t('practiceDone', { correct: stats.correct, total: set.items.length })}</b>
+    {stats.partial ? <span className="aha-hint">{t('practicePartial', { partial: stats.partial })}</span> : null}
     <div className="aha-row aha-summaryStats">
       <span><b>{Math.round(stats.accuracy * 100)}%</b>{t('accuracy')}</span>
       <span><b>{stats.bestStreak}</b>{t('bestStreak')}</span>

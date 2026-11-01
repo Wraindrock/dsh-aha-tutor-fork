@@ -271,7 +271,8 @@ test('end-to-end tutoring flow on the host', async () => {
     const typed = await lessons.grade({ item: { kind: 'blank', prompt: '胡克定律 $F=$', answer: ['-kx'] }, response: 'F = -kx' })
     assert.equal(typed.verdict, 'partial', 'the model, not the key, has the last word here')
     assert.match(llm.calls.at(-1).user, /<learner_answer>\nF = -kx/u)
-    assert.match(llm.calls.at(-1).system, /another notation/u, 'the grader is told a typed answer may be right in other words')
+    assert.match(llm.calls.at(-1).system, /written several ways/u, 'the teacher is told a typed answer may be right in other words')
+    assert.match(llm.calls.at(-1).system, /partly right/u, 'and that half right is a real judgement')
 
     // The teacher answers the check the learner got wrong, at the board,
     // right after the step it belongs to; the answer is in the prompt and the

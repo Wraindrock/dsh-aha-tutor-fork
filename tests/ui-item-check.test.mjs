@@ -114,9 +114,20 @@ function textOf(node) {
   return (node.children ?? []).map(textOf).join('')
 }
 
-function renderCard(props) {
+// graded: what the teacher replies to lesson/grade. Every answer is read by
+// the teacher now, so a card without one cannot be graded at all.
+const WRONG_GRADE = { score: 0, verdict: 'incorrect', feedback: '23 才是质数。', errorTag: 'chose A: 21' }
+
+function renderCard(props, graded = WRONG_GRADE) {
   const calls = []
-  const api = { call: async (endpoint, payload) => { calls.push([endpoint, payload]); return endpoint === 'speech/status' ? { state: 'off' } : null } }
+  const api = {
+    call: async (endpoint, payload) => {
+      calls.push([endpoint, payload])
+      if (endpoint === 'speech/status') return { state: 'off' }
+      if (endpoint === 'lesson/grade') return typeof graded === 'function' ? graded(payload) : graded
+      return null
+    },
+  }
   const element = extra => h(bundle.AppContext.Provider, { value: { api, t, language: 'zh' } }, h(bundle.ItemCard, { ...props, ...extra }))
   let renderer
   act(() => { renderer = TestRenderer.create(element()) })
@@ -139,7 +150,7 @@ test('a graded question offers a check, sends the note and shows what the teache
   assert.equal(buttons(renderer, zh.itemChallenge).length, 0, 'nothing to challenge before the answer is graded')
   await answerB(renderer)
   assert.deepEqual([results.length, results[0].given, results[0].correct], [1, 'b', false])
-  assert.match(textOf(renderer.root), /✔ A\. 21/u)
+  assert.match(textOf(renderer.root), /参考答案：A\. 21/u)
 
   // The box: an optional note, the microphone, then 请老师核对.
   await press(renderer, zh.itemChallenge)
@@ -163,11 +174,15 @@ test('a graded question offers a check, sends the note and shows what the teache
   assert.match(shown, /答对了（重新判过）/u)
   assert.match(shown, /老师核对确实有错，已更正21 = 3 × 7，不是质数。23 只有两个因数。这道题你之前还答过 2 次，也按改好的题重新判了。/u)
   assert.match(shown, /23 只有 1 和它本身两个因数；21 = 3 × 7。/u, 'the fixed explanation')
-  assert.doesNotMatch(shown, /✔ A\. 21/u, 'a right answer shows no key')
+  assert.doesNotMatch(shown, /A\. 21.*这一题写错/u, 'a right answer is not argued against')
   const badge = renderer.root.find(node => node.props?.className === 'aha-itemFixed')
   assert.equal(textOf(badge), '✎ 已更正')
   assert.equal(badge.props.title, `原来写的：\n答案：A. 21\n解析：${PRIME.explanation}`)
-  assert.equal(buttons(renderer, '23')[0].props.style.borderColor, 'var(--aha-ok)', 'B is the right option now')
+  // No option is painted right or wrong: the teacher's words carry the verdict,
+  // and the pick the learner made is shown as theirs.
+  assert.equal(buttons(renderer, '23')[0].props.style?.borderColor, undefined, 'no option is painted right')
+  assert.equal(buttons(renderer, '21')[0].props.style?.borderColor, undefined, 'and none is painted wrong')
+  assert.equal(buttons(renderer, '23')[0].props['data-picked'], 'true', 'the learner\'s own pick is still marked as theirs')
   assert.equal(results.length, 1, 'the answer is not graded twice')
   assert.equal(buttons(renderer, zh.itemChallenge).length, 1, 'it can be challenged again')
 
@@ -179,7 +194,7 @@ test('a graded question offers a check, sends the note and shows what the teache
 })
 
 test('a card without checks offers none, and a question fixed earlier shows its badge', async () => {
-  const { renderer } = renderCard({ item: FIXED, language: 'zh-CN', onContinue: () => undefined })
+  const { renderer } = renderCard({ item: FIXED, language: 'zh-CN', onContinue: () => undefined }, { score: 1, verdict: 'correct', feedback: '对，23 只有两个因数。' })
   assert.equal(textOf(renderer.root.find(node => node.props?.className === 'aha-itemFixed')), '✎ 已更正')
   await answerB(renderer)
   assert.match(textOf(renderer.root), /答对了/u)
@@ -234,7 +249,7 @@ test('a typed answer the key refused is read by the teacher, and its verdict cou
   assert.deepEqual(calls.map(([endpoint]) => endpoint), ['lesson/grade'], 'an open-or-typed answer goes to the host')
   assert.equal(calls[0][1].item.kind, 'blank', 'the host is told what kind of answer it is')
   assert.equal(results.length, 1)
-  assert.deepEqual([results[0].correct, results[0].gradedBy, results[0].errorTag], [true, 'teacher', ''])
+  assert.deepEqual([results[0].correct, results[0].verdict, results[0].errorTag], [true, 'correct', ''])
   assert.match(textOf(renderer.root), /答对了/u)
   assert.match(textOf(renderer.root), /负号表示方向相反/u, 'the teacher\'s feedback is shown')
 })
@@ -243,7 +258,7 @@ test('a typed answer that is still wrong explains this mistake, and the key is s
   const { renderer, results } = renderTyped(TYPED, { score: 0, verdict: 'incorrect', feedback: '负号才是回复力指向平衡位置的原因。', errorTag: '漏了负号' })
   typeIn(renderer, 'kx')
   await act(async () => { buttons(renderer, zh.submit)[0].props.onClick() })
-  assert.deepEqual([results[0].correct, results[0].gradedBy, results[0].errorTag], [false, 'teacher', '漏了负号'])
+  assert.deepEqual([results[0].correct, results[0].verdict, results[0].partial, results[0].errorTag], [false, 'incorrect', false, '漏了负号'])
   const shown = textOf(renderer.root)
   assert.match(shown, new RegExp(zh.incorrect, 'u'))
   assert.match(shown, /负号才是回复力指向平衡位置的原因/u, 'the answer to *this* answer')
@@ -251,9 +266,9 @@ test('a typed answer that is still wrong explains this mistake, and the key is s
   assert.match(shown, /-kx/u, 'the key is still there to compare with')
 })
 
-test('a failed grading call leaves the key\'s verdict standing and says why', async () => {
-  // A number written in words cannot be settled locally, so the host is asked;
-  // when it cannot answer, the key's own verdict still lets the lesson go on.
+test('a grading call that fails says so and invents no verdict', async () => {
+  // Nothing is guessed in the teacher's place: the card says the teacher could
+  // not be reached, keeps the answer there, and offers to submit again.
   const api = { call: async () => { throw Object.assign(new Error('busy'), { code: 'aha-tutor/llm-timeout' }) } }
   const props = { item: { ...TYPED, kind: 'number', answer: 4 }, language: 'zh-CN', onResult: () => undefined, askConfidence: false }
   let failing
@@ -262,8 +277,9 @@ test('a failed grading call leaves the key\'s verdict standing and says why', as
   act(() => input.props.onChange({ currentTarget: { value: '四' } }))
   await act(async () => { buttons(failing, zh.submit)[0].props.onClick() })
   const shown = textOf(failing.root)
-  assert.match(shown, new RegExp(zh.incorrect, 'u'), 'the key still gives a verdict')
-  assert.match(shown, new RegExp(zh['err_llm-timeout'], 'u'), 'and the reason the teacher could not read it is shown')
+  assert.doesNotMatch(shown, new RegExp(zh.incorrect, 'u'), 'no verdict is invented')
+  assert.match(shown, new RegExp(zh['err_llm-timeout'], 'u'), 'the reason the teacher could not read it is shown')
+  assert.ok(buttons(failing, zh.submit).length, 'the answer can be sent again')
 })
 
 test('a question\'s prompt is set in the prompt type; its options take the text around them', () => {

@@ -21,6 +21,8 @@ export function sessionStats(results) {
   return {
     answered: answered.length,
     correct: answered.filter(result => result.correct).length,
+    // "Partly right" is its own outcome, not a rounding of right or wrong.
+    partial: answered.filter(result => result.partial).length,
     accuracy,
     stars: accuracy >= 0.9 ? 3 : accuracy >= 0.6 ? 2 : 1,
     streak: run,

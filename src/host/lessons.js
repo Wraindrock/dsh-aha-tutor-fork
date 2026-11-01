@@ -8,7 +8,7 @@ import { applyFixes, boardForCheck, describeFixes, normalizeVerdict, sanitizeSte
 import { boardToPlainText } from '../core/board-script.js'
 import { conceptIndex, findLesson, insertLesson, lessonAfter, LIMITS, normalizeCards, normalizeCheatsheet, normalizeHandout, normalizePractice, outlineForPrompt, text, thinEvenly, unitCardRange, unitConcepts, unitQuizRange } from '../core/course-model.js'
 import { answersTo, correctEvidence, itemKey, logEvidence, stateBefore, takeEvidence } from '../core/evidence-log.js'
-import { OBJECTIVE_KINDS } from '../core/grading.js'
+import { normalizeGrade } from '../core/answer-grade.js'
 import { assertId, newId } from '../core/ids.js'
 import { cleanResponse, earlierGrade, fixItem, itemForCheck, normalizeItemVerdict, regrade, responseText } from '../core/item-fix.js'
 import { createConceptState, masteryPercent, recommendNext } from '../core/mastery.js'
@@ -24,7 +24,7 @@ const STEP_ID = /^s\d{1,4}$/u
 // Jobs that write a lesson's board: opened by the learner, or prefetched.
 const BOARD_JOBS = ['lesson/board', 'lesson/prefetch']
 // Earlier open answers to a fixed question the grader looks at again.
-const EARLIER_OPEN = 3
+const EARLIER_ANSWERS = 3
 
 export function createLessons({ store, llm, jobs, courses, learner, now = () => new Date() }) {
   const stamp = () => now().toISOString()
@@ -510,15 +510,16 @@ export function createLessons({ store, llm, jobs, courses, learner, now = () => 
 
   // Earlier answers to a question a check fixed (in another round, a review
   // or the lesson itself) graded again against the fixed question, and
-  // corrected in the learner's progress. Open answers go to the grader, the
-  // latest few only; one it cannot grade keeps its grade. Null when none
-  // changed.
+  // corrected in the learner's progress. Every answer is re-read by the
+  // teacher — a choice too, since it may have been picked for the wrong
+  // reason — the latest few only; one it cannot grade keeps its grade. Null
+  // when none changed.
   async function regradeEarlier({ course, key, item, verdict, except, language, signal }) {
     const answers = answersTo(await store.readJson(store.paths.progress(course.id), null), key, except)
-    const open = !OBJECTIVE_KINDS.includes(item.kind)
-    const graded = await Promise.all((open ? answers.slice(-EARLIER_OPEN) : answers).map(async entry => {
-      const again = open ? await grade({ item, response: entry.item.response, language, signal }).catch(error => { if (signal?.aborted) throw error; return null }) : null
-      if (open && !again) return null
+    const graded = await Promise.all(answers.slice(-EARLIER_ANSWERS).map(async entry => {
+      // The teacher reads the answer as the learner gave it, in words.
+      const again = await grade({ item, response: responseText(item, cleanResponse(item, entry.item.response)), language, signal }).catch(error => { if (signal?.aborted) throw error; return null })
+      if (!again) return null
       return { id: entry.id, next: earlierGrade(item, entry.item.response, { verdict, score: entry.evidence.score, grade: again }) }
     }))
     let found = null
@@ -541,9 +542,12 @@ export function createLessons({ store, llm, jobs, courses, learner, now = () => 
     return jobs.start('item/challenge', async api => {
       const place = await itemPlace(source)
       const answer = cleanResponse(place.item, response)
-      const told = place.item.kind === 'short' || place.item.kind === 'work'
-        ? [`A grader gave this answer a score of ${shown.score} (${shown.correct ? 'correct' : shown.partial ? 'partial' : 'incorrect'}).`, shown.feedback ? `Feedback shown: ${shown.feedback}` : '', shown.wrongStep ? `First wrong line found: ${shown.wrongStep}` : '', shown.fix ? `Fix shown: ${shown.fix}` : ''].filter(Boolean).join('\n')
-        : `The answer key marked this answer ${shown.correct ? 'correct' : shown.partial ? 'partly correct' : 'incorrect'}.`
+      const told = [
+        `The teacher graded this answer ${Number(shown.score).toFixed(2)} (${shown.correct ? 'correct' : shown.partial ? 'partly right' : 'not right'}), against the question's own key.`,
+        shown.feedback ? `Feedback shown: ${shown.feedback}` : '',
+        shown.wrongStep ? `First wrong line found: ${shown.wrongStep}` : '',
+        shown.fix ? `Fix shown: ${shown.fix}` : '',
+      ].filter(Boolean).join('\n')
       api.preview({ phase: 'checking' })
       const checked = await generateJson(llm, {
         purpose: 'teach',
@@ -577,24 +581,31 @@ export function createLessons({ store, llm, jobs, courses, learner, now = () => 
     })
   }
 
-  // Open answers, and the typed answers the classroom asks the teacher to read
-  // (see core/check-response.js): a "work" item (a written-out working) also
-  // gets the first wrong line and its fix, for the correction at the board.
+  // The teacher reads every answer: a choice, a multi-select, a blank, a
+  // number, a written answer or a written-out working. Nothing here compares
+  // the response with the key — what an answer is worth is a judgement about
+  // what the learner understood, and half right is a real outcome. A "work"
+  // item also gets the first wrong line and its fix, for the correction at
+  // the board.
   async function grade({ item, response, language = 'zh-CN', signal }) {
     if (!item?.prompt) throw new TutorError('invalid', 'Missing question')
     const work = item.kind === 'work'
-    const kind = ['work', 'short', 'blank', 'number'].includes(item.kind) ? item.kind : 'short'
     const answer = text(response, 4000)
-    if (!answer) return { score: 0, verdict: 'incorrect', feedback: '', errorTag: '', misconception: false, ...(work ? { wrongStep: '', why: '', fix: '' } : {}) }
+    if (!answer) return { score: 0, verdict: 'incorrect', correct: false, partial: false, feedback: '', errorTag: '', misconception: false, ...(work ? { wrongStep: '', why: '', fix: '' } : {}) }
     const result = await generateJson(llm, {
+      // The teacher is the same model that teaches: reading an answer to the
+      // question it just asked is part of teaching, and it is the cheap call
+      // only because the answer is short.
       purpose: 'quick',
       prompt: gradePrompt({
         item: {
-          kind,
+          kind: ['choice', 'multi', 'order', 'blank', 'number', 'short', 'work'].includes(item.kind) ? item.kind : 'short',
           prompt: text(item.prompt, 2000),
           answer: text(Array.isArray(item.answer) ? item.answer.join(' / ') : item.answer, 3000),
+          ...(Array.isArray(item.options) ? { options: item.options.slice(0, 8).map(option => ({ id: text(option?.id, 4), text: text(option?.text, 400) })) } : {}),
           ...(Number.isFinite(Number(item.tolerance)) ? { tolerance: Number(item.tolerance) } : {}),
           ...(item.unit ? { unit: text(item.unit, 20) } : {}),
+          ...(item.explanation ? { explanation: text(item.explanation, 1200) } : {}),
           rubric: Array.isArray(item.rubric) ? item.rubric.map(entry => text(entry, 300)) : [],
         },
         response: answer,
@@ -602,14 +613,7 @@ export function createLessons({ store, llm, jobs, courses, learner, now = () => 
       }),
       maxTokens: work ? 1800 : 1200,
       signal,
-      normalize: raw => ({
-        score: Math.min(1, Math.max(0, Number(raw?.score) || 0)),
-        verdict: ['correct', 'partial', 'incorrect'].includes(raw?.verdict) ? raw.verdict : Number(raw?.score) >= 0.8 ? 'correct' : Number(raw?.score) >= 0.4 ? 'partial' : 'incorrect',
-        feedback: text(raw?.feedback, 1200),
-        errorTag: text(raw?.errorTag, 80),
-        misconception: raw?.misconception === true,
-        ...(work ? { wrongStep: text(raw?.wrongStep, 400), why: text(raw?.why, 400), fix: text(raw?.fix, 400) } : {}),
-      }),
+      normalize: raw => normalizeGrade(raw, { kinds: ['correct', 'partial', 'incorrect'] }),
     })
     return result
   }

@@ -371,24 +371,31 @@ export function repairPrompt({ lesson, language, step, boardSoFar, answer, grade
 
 const GRADE_FIELDS = '"score":<0 to 1>,"verdict":"correct|partial|incorrect","feedback":"2–3 encouraging sentences: what is right, what is missing, how to fix it","errorTag":"<3–6 word label of the main mistake, or empty>","misconception":<true if the answer shows a confident wrong belief rather than a gap>'
 
-// A "work" item is a written-out working: the grader also finds the first
-// line that goes wrong, so the teacher can correct exactly that line.
-//
-// `item.kind` is passed through for every kind the classroom asks about, not
-// just "work" and "short": a blank or a number the machine called wrong is
-// read here too, so an answer right in other words is credited and a wrong
-// one gets an explanation of that mistake.
+const KIND_GUIDANCE = Object.freeze({
+  choice: 'This was a choice question: the learner picked one option. Read the option they picked — and, if it is the wrong one, why it is attractive — rather than only checking it against the key. An option can be picked for the right reason from a wrong idea, and "correct" means the reasoning they most likely used holds up.',
+  multi: 'This was a multiple-select question: weigh which of the picked options are right, which of the right ones are missing, and whether the picture is close enough to be partly right.',
+  order: 'This was an ordering question: a partly right order is real credit, and say which pair was out of place.',
+  blank: 'This was a one-word or one-formula answer. The same answer is often written several ways ("− k x", "F = -kx", the formula with or without the equals sign, a word in another script); a different notation or wording that means the same thing is right. Say plainly which part of their phrasing was off if it was.',
+  number: 'This was a number. A number with its unit, rounded differently, or written as another equivalent form is the same number; a number that is right in method but wrong in arithmetic is not fully right.',
+  short: 'This was an answer in the learner\'s own words: credit the ideas, never the phrasing.',
+  work: 'This was a written-out working: follow it line by line and find the first line that goes wrong. A different but valid route is not a mistake, and a slip carried forward counts once.',
+})
+
+// The teacher reads the answer. `item.answer` is what the question was
+// written to mean — a reference to weigh, never a string to compare with. The
+// verdict, and "partly right" in particular, is the model's considered
+// judgement of what the learner understood.
 export function gradePrompt({ item, response, language }) {
   const work = item.kind === 'work'
-  const typed = item.kind === 'blank' || item.kind === 'number'
-  const tolerance = typed
-    ? ' The answer key lists one or a few accepted spellings; a learner who wrote the same idea in other words, another notation, a formula instead of a word, or the number with its unit is right. Mark it "correct" and say how it differs from the key, so the key can be widened.'
+  const options = Array.isArray(item.options) && item.options.length
+    ? block('options', item.options.map(option => `${String(option.id).toUpperCase()}. ${option.text}`).join('\n'))
     : ''
   return {
-    system: join(PERSONA, `You grade open answers fairly: credit correct ideas expressed in the learner's own words, ignore spelling and phrasing, and pinpoint the exact gap.${work ? ' For a written working, follow it line by line and find the first line that goes wrong; a different but valid route is not a mistake, and a slip carried forward counts once.' : ''}${tolerance} ${languageRule(language)}`, JSON_ONLY),
+    system: join(PERSONA, `You are the teacher who asked this question, reading this one learner's answer. Judge it the way you would in class: work out what the answer shows they understood, then say how right it is. There is no single canonical form of a right answer — the learner writes in their own words, in their own notation — and a score between the ends ("partly right") is a real judgement to make whenever some of the idea is there and some is not. Never call an answer wrong because it is worded unlike the key, and never call it right because it looks similar. ${KIND_GUIDANCE[item.kind] ?? KIND_GUIDANCE.short} ${languageRule(language)}`, JSON_ONLY),
     user: join(
       block('question', item.prompt),
-      block(work ? 'model_working' : 'model_answer', item.answer),
+      options,
+      block(work ? 'model_working' : 'what_the_question_meant', item.answer),
       block('rubric', (item.rubric ?? []).join('\n')),
       block(work ? 'learner_working' : 'learner_answer', response),
       work
@@ -458,13 +465,10 @@ Return {"verdict":"wrong|right|unclear","summary":"one sentence for the learner"
 // grading of their answer is wrong. One call checks all three, fixes the
 // question and, for an open answer, grades it again.
 export function verifyItemPrompt({ scope, language, item, kind, response, grading, note }) {
-  const graded = kind === 'short' || kind === 'work'
-  const verdicts = graded ? 'wrong|unclear|misgraded|right' : 'wrong|unclear|right'
-  const regrade = graded
-    ? `Unless the verdict is "right" (or "credit" is true), grade the learner's answer again against the corrected question in "grade": {${GRADE_FIELDS}${kind === 'work' ? ',"wrongStep":"the first wrong line of the learner\'s working, copied exactly, or empty","why":"one sentence","fix":"that line written correctly, with inline math $…$"' : ''}}.\n`
-    : ''
+  const verdicts = 'wrong|unclear|misgraded|right'
+  const regrade = `Unless the verdict is "right" (or "credit" is true), grade the learner's answer again against the corrected question in "grade": {${GRADE_FIELDS}${kind === 'work' ? ',"wrongStep":"the first wrong line of the learner\'s working, copied exactly, or empty","why":"one sentence","fix":"that line written correctly, with inline math $…$"' : ''}}.\n`
   return {
-    system: join(PERSONA, `The learner thinks a practice question, its answer key or the grading of their answer is wrong. Check it the way a careful examiner would: solve the question yourself first, then recompute every number and check every fact, unit, option, the answer key, the explanation and the grading. Never defend a mistake and never invent one; an equivalent answer in another valid form is right. ${languageRule(language)}`, JSON_ONLY),
+    system: join(PERSONA, `The learner thinks a practice question, its answer key or the grading of their answer is wrong. Check it the way a careful examiner would: solve the question yourself first, then recompute every number and check every fact, unit, option, the answer key, the explanation and the grading. Every kind of question is your judgement — a choice, a blank and a number included — so "misgraded" is available for all of them. Never defend a mistake and never invent one; an equivalent answer in another valid form is right. ${languageRule(language)}`, JSON_ONLY),
     user: join(
       block('scope', scope),
       block('question', item),
@@ -472,11 +476,12 @@ export function verifyItemPrompt({ scope, language, item, kind, response, gradin
       block('grading', grading),
       block('learner_says', note || '(no reason given)'),
       `Decide which is true:
-- "wrong": the question has a mistake: its answer key, an option, the prompt, the explanation or a hint${graded ? ', its model answer or its rubric' : '; a key that rejects a right answer written another valid way is a mistake too'}. Put the whole corrected question in "item", in the same JSON shape, with the same "kind" and the same number of options, and change only what is wrong. Leave out "svg" and "plot" to keep the figure as it is.
+- "wrong": the question has a mistake: its reference answer, an option, the prompt, the explanation, a hint or its rubric — including a reference that rejects a right answer written another valid way. Put the whole corrected question in "item", in the same JSON shape, with the same "kind" and the same number of options, and change only what is wrong. Leave out "svg" and "plot" to keep the figure as it is.
 - "unclear": whether an answer is right depends on a convention or an assumption the question does not state. Put the question in "item" with that convention written into the prompt, and the key and explanation under it. Set "credit": true when the learner's answer is right under another reasonable reading.
-${graded ? '- "misgraded": the question is right, but the learner\'s answer was graded wrongly.\n' : ''}- "right": the question, its answer and the grading are all right.
+- "misgraded": the question is right, but the learner's answer was judged wrongly — by you, or by an older build.
+- "right": the question, its answer and the grading are all right.
 ${regrade}"summary": one sentence for the learner. "explanation": 2–5 sentences that answer the learner's doubt: what was wrong and the right reasoning, or why it is right (inline math $…$). Speak to the learner in plain words: never quote scores, grading labels or field names.
-Return {"verdict":"${verdicts}","summary":"…","explanation":"…","item":{…the corrected question, for wrong or unclear…},"credit":false${graded ? ',"grade":{…}' : ''}}`,
+Return {"verdict":"${verdicts}","summary":"…","explanation":"…","item":{…the corrected question, for wrong or unclear…},"credit":false,"grade":{…the new grade, unless "right" or credit…}}`,
     ),
   }
 }
