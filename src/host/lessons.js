@@ -15,7 +15,7 @@ import { createConceptState, masteryPercent, recommendNext } from '../core/maste
 import { createCard, isDue, review } from '../core/srs.js'
 import { masteryFor, passagesFor, readMaterials, readProfile, readProgress } from './context.js'
 import { fieldCounter, generateJson, generateSteps, TutorError } from './generate.js'
-import { askPrompt, challengePrompt, cheatsheetPrompt, correctionPrompt, detectLanguage, flashcardsPrompt, gradePrompt, handoutPrompt, lessonPrompt, quizPrompt, reexplainPrompt, verifyItemPrompt, verifyStepPrompt } from './prompts.js'
+import { askPrompt, challengePrompt, cheatsheetPrompt, correctionPrompt, detectLanguage, flashcardsPrompt, gradePrompt, handoutPrompt, lessonPrompt, quizPrompt, reexplainPrompt, repairPrompt, verifyItemPrompt, verifyStepPrompt } from './prompts.js'
 
 const EVENTS_KEPT = 200
 // Questions and re-explanations kept per lesson, replayed where they were asked.
@@ -230,6 +230,52 @@ export function createLessons({ store, llm, jobs, courses, learner, now = () => 
         await record({ courseId: course.id, lessonId: lesson.id, conceptIds, evidence: { kind: 'reexplain' } })
       }
       return { steps: answer.steps, aside }
+    })
+  }
+
+  // The learner answered a lesson's check and it did not land. The teacher
+  // responds to that answer at the board: a re-teach aimed at what their
+  // answer shows they believe ('reteach'), or the missing part of a
+  // half-right answer ('repair'). Either way the aside is anchored to the
+  // step whose check it was, so the lesson carries on from there.
+  function coach({ scope, stepIndex = 0, anchorStepId, answer, grade: graded, move }) {
+    const said = text(answer, 2000)
+    if (!said) throw new TutorError('invalid', 'Nothing to respond to')
+    const kind = move === 'repair' ? 'repair' : 'reteach'
+    return jobs.start('lesson/coach', async api => {
+      const { course, lesson, board, language } = await scopeBoard(scope)
+      if (!board?.steps?.length) throw new TutorError('no-board', 'The board is not written yet. Try again once its first step is up.')
+      const index = Math.min(board.steps.length - 1, Math.max(0, Number(stepIndex) || 0))
+      const step = boardToPlainText({ steps: [board.steps[index]] }, { maxChars: 3000 })
+      const notes = {
+        verdict: typeof graded?.verdict === 'string' ? graded.verdict : '',
+        feedback: text(graded?.feedback, 1200),
+        errorTag: text(graded?.errorTag, 80),
+      }
+      const boardSoFar = boardToPlainText(board, { uptoStep: index, maxChars: 5000 })
+      const response = await generateSteps(llm, {
+        purpose: 'teach',
+        effort: 'lowest',
+        prompt: kind === 'repair'
+          ? repairPrompt({ lesson, language, step, boardSoFar, answer: said, grade: notes })
+          : reexplainPrompt({ lesson, language, step, boardSoFar, style: 'example', answer: said, grade: notes }),
+        maxTokens: 6000,
+        signal: api.signal,
+        conceptIds: lesson?.concepts?.map(concept => concept.id) ?? [],
+        onStep: next => api.push(next),
+      })
+      const aside = await keepAside(scope, {
+        kind: 'coach',
+        style: kind,
+        errorTag: notes.errorTag,
+        answer: said.slice(0, 300),
+        anchorStepId: anchorFor(board, index, anchorStepId),
+        steps: response.steps,
+      })
+      if (scope.kind === 'lesson' && course) {
+        await record({ courseId: course.id, lessonId: lesson.id, conceptIds: lesson.concepts.map(concept => concept.id), evidence: { kind: 'reexplain' } })
+      }
+      return { steps: response.steps, aside }
     })
   }
 
@@ -531,16 +577,29 @@ export function createLessons({ store, llm, jobs, courses, learner, now = () => 
     })
   }
 
-  // Open answers. A "work" item (a written-out working) also gets the first
-  // wrong line and its fix, for the correction at the board.
+  // Open answers, and the typed answers the classroom asks the teacher to read
+  // (see core/check-response.js): a "work" item (a written-out working) also
+  // gets the first wrong line and its fix, for the correction at the board.
   async function grade({ item, response, language = 'zh-CN', signal }) {
     if (!item?.prompt) throw new TutorError('invalid', 'Missing question')
     const work = item.kind === 'work'
+    const kind = ['work', 'short', 'blank', 'number'].includes(item.kind) ? item.kind : 'short'
     const answer = text(response, 4000)
     if (!answer) return { score: 0, verdict: 'incorrect', feedback: '', errorTag: '', misconception: false, ...(work ? { wrongStep: '', why: '', fix: '' } : {}) }
     const result = await generateJson(llm, {
       purpose: 'quick',
-      prompt: gradePrompt({ item: { kind: work ? 'work' : 'short', prompt: text(item.prompt, 2000), answer: text(item.answer, 3000), rubric: Array.isArray(item.rubric) ? item.rubric.map(entry => text(entry, 300)) : [] }, response: answer, language }),
+      prompt: gradePrompt({
+        item: {
+          kind,
+          prompt: text(item.prompt, 2000),
+          answer: text(Array.isArray(item.answer) ? item.answer.join(' / ') : item.answer, 3000),
+          ...(Number.isFinite(Number(item.tolerance)) ? { tolerance: Number(item.tolerance) } : {}),
+          ...(item.unit ? { unit: text(item.unit, 20) } : {}),
+          rubric: Array.isArray(item.rubric) ? item.rubric.map(entry => text(entry, 300)) : [],
+        },
+        response: answer,
+        language,
+      }),
       maxTokens: work ? 1800 : 1200,
       signal,
       normalize: raw => ({
@@ -846,7 +905,7 @@ export function createLessons({ store, llm, jobs, courses, learner, now = () => 
     }).catch(() => undefined)
   }
 
-  return Object.freeze({ get, prepare, ask, reexplain, challenge, challengeItem, handout, record, grade, correct, savePosition, complete, practice, unitSheet, saveSheetLayout, unitQuiz, unitCards, cardSession, reviewCard })
+  return Object.freeze({ get, prepare, ask, reexplain, coach, challenge, challengeItem, handout, record, grade, correct, savePosition, complete, practice, unitSheet, saveSheetLayout, unitQuiz, unitCards, cardSession, reviewCard })
 }
 
 // The job's progress while a JSON answer streams in: how many questions or

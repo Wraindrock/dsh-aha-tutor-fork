@@ -1,5 +1,9 @@
 // Automatic grading for objective questions. Open answers ("short") are
 // graded by the model on the host; everything here is deterministic.
+//
+// A blank is a short answer typed by hand, so it is compared leniently: a
+// learner who writes "−kx", "-k x", "− kx" or "F=-kx" for the key "-kx" knows
+// the answer. Only a genuinely different answer is wrong.
 
 export const OBJECTIVE_KINDS = Object.freeze(['choice', 'multi', 'blank', 'number', 'order'])
 
@@ -24,6 +28,75 @@ function parseNumber(value) {
   if (percent) return Number(percent[1]) / 100
   const number = Number(text)
   return Number.isFinite(number) ? number : Number.NaN
+}
+
+// The marks that carry no meaning in a short answer: spaces, multiplication
+// dots and stars, quote marks, the equals of an "F = -kx" typed whole, the
+// technical brackets around a formula, and the punctuation a learner may end
+// the line with. Every dash becomes "-".
+const LOOSE_STRIP = /[\s　=*×·⋅'`"“”‘’()（）[\]【】]/gu
+
+const LOOSE_EDGE = /^[,.!?;:。，；：！？、~～…]+|[,.!?;:。，；：！？、~～…]+$/gu
+
+function looseFold(value) {
+  return normalizeAnswerText(value)
+    .replace(/[−–—‒﹣－]/gu, '-')
+    .replace(LOOSE_STRIP, '')
+    .replace(LOOSE_EDGE, '')
+    .trim()
+}
+
+// The forms a short answer is compared in: as written, then without the
+// marks above, and the right-hand side of an equation the learner retyped
+// ("F=-kx" for "-kx").
+function answerForms(value) {
+  const forms = new Set()
+  const normalized = normalizeAnswerText(value)
+  if (normalized) forms.add(normalized)
+  const loose = looseFold(value)
+  if (loose) forms.add(loose)
+  const right = /=\s*(.+)$/u.exec(normalized)?.[1]
+  if (right) {
+    forms.add(right)
+    const folded = looseFold(right)
+    if (folded) forms.add(folded)
+  }
+  return forms
+}
+
+const sameForms = (a, b) => [...a].some(form => b.has(form))
+
+// A number typed with its unit ("9.8 m/s²", "4 N", "0.5s") is still that
+// number: whatever follows the figure must read as a unit, not a second
+// figure, so "4 + 5" never passes for "4".
+export function parseAnswerNumber(value) {
+  const direct = parseNumber(value)
+  if (Number.isFinite(direct)) return direct
+  const text = normalizeAnswerText(value).replace(/,/gu, '')
+  const match = /^(-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)\s*(.*)$/u.exec(text)
+  if (!match) return Number.NaN
+  const rest = match[2].replace(/[\s　]/gu, '')
+  // A unit may follow the figure — letters, the marks of a compound unit
+  // (m/s², kg·m), or a Chinese unit — but nothing that carries a figure of
+  // its own: "4 N" and "4牛" are four, "4 + 5" is not. A power is the one
+  // figure a unit may carry ("m/s2" for m/s²).
+  if (rest && !/^(?=.*[^\d\s+\-=,。，、;；:：])[a-zµμ%/°℃·⋅-]*\d{0,2}[a-zµμ%/°℃·⋅-]*$/iu.test(rest) && !/^[^\d\s+\-=,。，、;；:：]{1,10}$/u.test(rest)) return Number.NaN
+  return parseNumber(match[1].replace(/\s/gu, ''))
+}
+
+// Whether a typed answer is close enough to an accepted one: the same text
+// read leniently, or the same number (within 0.1 %, the default tolerance).
+export function answerMatches(accepted, response) {
+  const given = answerForms(response)
+  if (!given.size) return false
+  const keys = (Array.isArray(accepted) ? accepted : [accepted]).map(answerForms).filter(forms => forms.size)
+  if (!keys.length) return false
+  if (keys.some(forms => sameForms(given, forms))) return true
+  const number = parseAnswerNumber(response)
+  if (!Number.isFinite(number)) return false
+  return keys.some(forms => [...forms]
+    .map(entry => parseAnswerNumber(entry))
+    .some(value => Number.isFinite(value) && Math.abs(value - number) <= Math.max(1e-9, Math.abs(value) * 0.001)))
 }
 
 // Returns { score: 0..1, correct: boolean, gradable: boolean }.
@@ -61,7 +134,7 @@ export function gradeObjective(item, response) {
 
   if (item.kind === 'number') {
     const expected = parseNumber(item.answer)
-    const given = parseNumber(response)
+    const given = parseAnswerNumber(response)
     if (!Number.isFinite(expected)) return { score: 0, correct: false, gradable: false }
     if (!Number.isFinite(given)) return { score: 0, correct: false, gradable: true }
     const tolerance = Number.isFinite(Number(item.tolerance)) && Number(item.tolerance) >= 0
@@ -71,19 +144,13 @@ export function gradeObjective(item, response) {
     return { score: correct ? 1 : 0, correct, gradable: true }
   }
 
-  // blank: any accepted spelling counts.
-  const accepted = (Array.isArray(item.answer) ? item.answer : [item.answer]).map(normalizeAnswerText).filter(Boolean)
+  // blank: any accepted spelling counts, compared leniently (see above).
+  const accepted = (Array.isArray(item.answer) ? item.answer : [item.answer]).filter(value => String(value ?? '').trim())
   if (!accepted.length) return { score: 0, correct: false, gradable: false }
-  const given = normalizeAnswerText(response)
-  const correct = accepted.includes(given)
-  if (correct) return { score: 1, correct, gradable: true }
-  const asNumber = parseNumber(response)
-  const numeric = accepted.map(parseNumber).filter(Number.isFinite)
-  if (Number.isFinite(asNumber) && numeric.some(value => Math.abs(value - asNumber) <= Math.max(1e-9, Math.abs(value) * 0.001))) {
-    return { score: 1, correct: true, gradable: true }
-  }
-  return { score: 0, correct: false, gradable: true }
+  const correct = answerMatches(accepted, response)
+  return { score: correct ? 1 : 0, correct, gradable: true }
 }
+
 
 // A short label of a wrong answer, for the mastery model's misconception log.
 export function wrongLabel(item, response) {

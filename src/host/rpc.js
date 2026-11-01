@@ -131,6 +131,9 @@ export function createRoutes({ courses, lessons, learner, studio, projects, jobs
     'lesson/prepare': payload => lessons.prepare({ courseId: need(payload, 'courseId', 'crs'), lessonId: need(payload, 'lessonId', 'les'), force: payload.force === true, style: payload.style }),
     'lesson/ask': payload => ({ job: lessons.ask({ scope: scopeOf(payload), stepIndex: payload.stepIndex, question: payload.question, anchorStepId: payload.anchorStepId }) }),
     'lesson/reexplain': payload => ({ job: lessons.reexplain({ scope: scopeOf(payload), stepIndex: payload.stepIndex, style: STYLES.includes(payload.style) ? payload.style : 'example', anchorStepId: payload.anchorStepId }) }),
+    // The teacher's move after a check: a re-teach aimed at the answer just
+    // given ('reteach'), or the missing piece of a half-right one ('repair').
+    'lesson/coach': payload => ({ job: lessons.coach({ scope: scopeOf(payload), stepIndex: payload.stepIndex, anchorStepId: payload.anchorStepId, answer: typeof payload.answer === 'string' ? payload.answer.slice(0, 2000) : '', grade: payload.grade, move: payload.move === 'repair' ? 'repair' : 'reteach' }) }),
     'lesson/challenge': payload => ({ job: lessons.challenge({ scope: scopeOf(payload), stepIndex: payload.stepIndex, anchorStepId: payload.anchorStepId, target: challengeTarget(payload), note: typeof payload.note === 'string' ? payload.note : '' }) }),
     'lesson/record': payload => lessons.record({
       courseId: need(payload, 'courseId', 'crs'),

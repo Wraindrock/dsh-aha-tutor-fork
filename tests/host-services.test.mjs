@@ -65,6 +65,8 @@ function fakeLlm() {
     if (user.includes('Score each rubric')) return JSON.stringify({ scores: [{ criterionId: 'r1', points: 45, comment: '好' }, { criterionId: 'r2', points: 80, comment: '超分' }], summary: '不错', strengths: ['认真'], nextSteps: ['加图'] })
     if (user.includes('Update the profile')) return JSON.stringify({ background: '物理初学者', goals: ['理解振动'], strengths: [], weaknesses: ['负号'], preferences: { style: '多举例' }, newNote: '喜欢例子' })
     if (user.includes('went wrong somewhere')) return [step('这里少了负根'), step('记住正负')].join('\n')
+    // The teacher's move after a check (coach): the answer reaches this prompt.
+    if (user.includes('answered the check on this step') || user.includes('has part of this right')) return [step('从这个答案说起'), step('再看一遍公式')].join('\n')
     if (user.includes('<learner_working>')) return JSON.stringify({ score: 0.5, verdict: 'partial', feedback: '只找到一个根', errorTag: '漏了负根', wrongStep: '$x=2$', why: '开平方要取正负', fix: '$x=\\pm 2$' })
     if (user.includes('<learner_answer>')) return JSON.stringify({ score: 0.5, verdict: 'partial', feedback: '方向对了', errorTag: '缺单位' })
     return '{}'
@@ -264,6 +266,36 @@ test('end-to-end tutoring flow on the host', async () => {
     assert.ok(await store.exists(store.paths.practice(courseId, completed.inserted.id)))
     const graded = await lessons.grade({ item: { prompt: '解释负号', answer: '方向相反' }, response: '反方向' })
     assert.equal(graded.verdict, 'partial')
+    // A typed short answer may be right in words the key does not list: the
+    // teacher reads it, and its own words reach the grader.
+    const typed = await lessons.grade({ item: { kind: 'blank', prompt: '胡克定律 $F=$', answer: ['-kx'] }, response: 'F = -kx' })
+    assert.equal(typed.verdict, 'partial', 'the model, not the key, has the last word here')
+    assert.match(llm.calls.at(-1).user, /<learner_answer>\nF = -kx/u)
+    assert.match(llm.calls.at(-1).system, /another notation/u, 'the grader is told a typed answer may be right in other words')
+
+    // The teacher answers the check the learner got wrong, at the board,
+    // right after the step it belongs to; the answer is in the prompt and the
+    // aside is kept with the lesson like an answer to a raised hand.
+    const coached = await finish(jobs, lessons.coach({
+      scope: { kind: 'lesson', courseId, lessonId: firstLesson.id },
+      stepIndex: 2,
+      answer: '负号说明方向相同',
+      grade: { verdict: 'incorrect', feedback: '方向反了', errorTag: '方向搞反' },
+      move: 'reteach',
+    }))
+    assert.equal(coached.steps[0].say, '从这个答案说起')
+    const coachPrompt = llm.calls.at(-1)
+    assert.match(coachPrompt.user, /<learner_answer>\n负号说明方向相同/u)
+    assert.match(coachPrompt.user, /The mistake, in a few words: 方向搞反/u)
+    assert.match(coachPrompt.user, /Do not repeat the same explanation/u)
+    assert.match(coachPrompt.user, /<board_so_far>[\s\S]*F=-kx/u, 'the re-teach sees the board up to that step')
+    const coachAside = (await lessons.get({ courseId, lessonId: firstLesson.id })).asides.at(-1)
+    assert.deepEqual([coachAside.kind, coachAside.style, coachAside.answer], ['coach', 'reteach', '负号说明方向相同'])
+    // A half-right answer is finished rather than explained over.
+    const repaired = await finish(jobs, lessons.coach({ scope: { kind: 'lesson', courseId, lessonId: firstLesson.id }, stepIndex: 2, answer: '方向相反但大小不对', grade: { verdict: 'partial' }, move: 'repair' }))
+    assert.ok(repaired.steps.length)
+    assert.match(llm.calls.at(-1).user, /has part of this right/u)
+    assert.match(llm.calls.at(-1).user, /add no check/u)
 
     // learner
     const plan = await learner.plan({ today: '2026-10-19' })

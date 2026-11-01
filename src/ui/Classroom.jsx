@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { applyFixes, prefixFixes } from '../core/board-fix.js'
+import { coachMove } from '../core/check-response.js'
 import { boardScope } from './api.js'
 import { Board, Inline } from './board/Board.jsx'
 import { captionSentences } from './board/inline.js'
@@ -55,7 +56,11 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
   const [asides, setAsides] = useState(() => savedAsides.map(aside => asideEntry({
     id: aside.id,
     kind: aside.kind,
-    label: aside.kind === 'question' ? aside.question : aside.kind === 'correction' ? correctionLabel(aside.errorTag) : aside.kind === 'challenge' ? challengeLabel(aside.note, aside.verdict) : t('reexplainedAs', { style: styleLabel(aside.style) }),
+    label: aside.kind === 'question' ? aside.question
+      : aside.kind === 'correction' ? correctionLabel(aside.errorTag)
+        : aside.kind === 'challenge' ? challengeLabel(aside.note, aside.verdict)
+          : aside.kind === 'coach' ? t(aside.style === 'repair' ? 'coachRepaired' : 'coachReteach', { answer: opening(aside.answer) })
+            : t('reexplainedAs', { style: styleLabel(aside.style) }),
     anchorId: aside.anchorStepId,
     steps: aside.steps ?? [],
     serverId: aside.id,
@@ -443,10 +448,23 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
   const captionLines = useMemo(() => captionSentences(current?.say), [current?.say])
   const caption = captionLines[Math.min(snapshot?.sentence ?? 0, captionLines.length - 1)] ?? ''
 
+  // How many times this check was answered, so a learner who keeps missing it
+  // is not re-taught the same idea a fourth time.
+  const checkAttempts = useRef(new Map())
+
   function onCheckResult(result) {
-    setCheckResult({ checkId: check?.id, result })
+    const attempts = (checkAttempts.current.get(check?.id) ?? 0) + 1
+    checkAttempts.current.set(check?.id, attempts)
+    // What the teacher does next follows the answer, not just its score: a
+    // half-right answer is finished, a wrong one re-taught from the answer
+    // given, a right one confirmed in a sentence. A working that went wrong
+    // is corrected line by line instead (see continueCheck).
+    const given = String(result.given ?? result.response ?? '')
+    const graded = { correct: result.correct, partial: result.partial, score: result.score, verdict: result.correct ? 'correct' : result.partial ? 'partial' : 'incorrect', feedback: result.feedback, errorTag: result.errorTag }
+    const move = needsCorrectionFor(result) ? { kind: 'none' } : coachMove({ graded, response: given, attempts })
+    setCheckResult({ checkId: check?.id, result, move })
     if (!recordChecks || scope.kind !== 'lesson') return
-    api.call('lesson/record', {
+    return api.call('lesson/record', {
       courseId: scope.courseId,
       lessonId: scope.lessonId,
       conceptIds: check?.conceptIds ?? [],
@@ -456,6 +474,36 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
     }).catch(() => undefined)
   }
 
+  // A written-out working that went wrong is corrected at the board, which
+  // the correction flow does before anything else.
+  function needsCorrectionFor(result) {
+    return Boolean(check?.kind === 'work' && result && !result.correct && String(result.response ?? '').trim())
+  }
+
+  // The teacher's move after a check, at the board: a re-teach aimed at the
+  // answer just given, the missing piece of a half-right one, or a one-line
+  // confirmation. The aside anchors to the check's step and the lesson
+  // carries on from there.
+  async function startCoach(move, result) {
+    const said = String(result.given ?? result.response ?? '').trim()
+    if (!said) return
+    setAsking(move.kind === 'repair' ? 'repairing' : 'reteaching')
+    await runAside({
+      endpoint: 'lesson/coach',
+      payload: {
+        move: move.kind === 'repair' ? 'repair' : 'reteach',
+        answer: said,
+        grade: { verdict: result.correct ? 'correct' : result.partial ? 'partial' : 'incorrect', feedback: result.feedback, errorTag: result.errorTag },
+      },
+      kind: 'coach',
+      label: t(move.kind === 'repair' ? 'coachRepaired' : 'coachReteach', { answer: opening(said) }),
+      anchorIndex: index,
+      // The lesson goes on only once the aside is on the board, so the
+      // learner hears the answer to *their* answer before the next idea.
+      onFailed: () => player.answer(check?.id),
+    })
+  }
+
   const status = snapshot?.status ?? 'idle'
   const buffering = (status === 'buffering' || (!steps.length && !complete)) && !error
   const total = steps.length + (complete ? 0 : 1)
@@ -463,8 +511,9 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
   const bufferingLabel = asking === 'answering' || writing?.kind === 'question' ? t('answering')
     : asking === 'correcting' || writing?.kind === 'correction' ? t('correcting')
       : asking === 'checking' || (writing?.kind === 'challenge' && !writing.steps.length) ? t('checkingStep')
-        : asking === 'reexplaining' || writing ? t('generating')
-          : steps.length ? t('bufferingLesson') : t('preparingLesson')
+        : asking === 'reteaching' || asking === 'repairing' || writing?.kind === 'coach' ? t('reteaching')
+          : asking === 'reexplaining' || writing ? t('generating')
+            : steps.length ? t('bufferingLesson') : t('preparingLesson')
 
   // The lesson itself is still being written (not an answer or a correction).
   // The card replaces the small pill only when that wait goes on.
@@ -473,13 +522,25 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
   const doneGoals = goals ? goals.filter(state => state === 'done').length : 0
   const writingAside = Boolean(writing) || Boolean(asking)
 
-  const needsCorrection = check?.kind === 'work' && checkResult?.checkId === check.id && !checkResult.result.correct && Boolean(checkResult.result.response?.trim())
+  const currentResult = checkResult?.checkId === check?.id ? checkResult.result : null
+  const currentMove = checkResult?.checkId === check?.id ? checkResult.move : null
+  const needsCorrection = check?.kind === 'work' && Boolean(currentResult) && !currentResult.correct && Boolean(currentResult.response?.trim())
+  // The teacher answers the wrong or half-right answer at the board before
+  // the lesson moves on; the button says so instead of just "continue".
+  const coachAfter = !needsCorrection && currentMove && (currentMove.kind === 'reteach' || currentMove.kind === 'repair') ? currentMove : null
   function continueCheck() {
     if (!check) return
+    const result = currentResult
     if (needsCorrection) {
       if (correctionStarted.current.has(check.id)) return
       correctionStarted.current.add(check.id)
-      startCorrection(check, checkResult.result)
+      startCorrection(check, result)
+      return
+    }
+    if (coachAfter) {
+      if (correctionStarted.current.has(`coach:${check.id}`)) return
+      correctionStarted.current.add(`coach:${check.id}`)
+      startCoach(coachAfter, result)
       return
     }
     player.answer(check.id)
@@ -518,7 +579,7 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
           {preparing ? <PrepProgress prep={prep} label={bufferingLabel} first={!steps.length} hand={settings.boardFont !== 'standard'} /> : null}
           {check ? <div className="aha-checkCard">
             <div className="aha-spread"><b>{t('checkTitle')}</b></div>
-            <ItemCard item={check} language={language} onResult={onCheckResult} onContinue={continueCheck} continueLabel={needsCorrection ? t('seeCorrection') : undefined} keyboard />
+            <ItemCard item={check} language={language} onResult={onCheckResult} onContinue={continueCheck} continueLabel={needsCorrection ? t('seeCorrection') : coachAfter ? t(coachAfter.kind === 'repair' ? 'seeRepair' : 'seeReteach') : undefined} keyboard />
           </div> : null}
         </div>
         {captions && caption ? <div className="aha-caption"><Inline text={caption} /></div> : <div className="aha-caption" />}
@@ -583,7 +644,7 @@ export function Classroom({ scope, title, crumb, steps: initialSteps = [], strea
           {entries.map(entry => <div key={entry.key} role="listitem" className="aha-lineRow" data-aside={entry.aside ? 'true' : undefined}>
             <button type="button" className="aha-line" data-kind={entry.kind} data-current={entry.stepIndex === index ? 'true' : undefined}
               disabled={entry.stepIndex < 0} onClick={() => player.seek(entry.stepIndex)}>
-              {entry.kind === 'question' ? <span className="aha-lineTag">✋</span> : entry.kind === 'reexplain' ? <span className="aha-lineTag">🔄</span> : entry.kind === 'correction' ? <span className="aha-lineTag">✏️</span> : entry.kind === 'challenge' ? <span className="aha-lineTag">🧐</span> : null}
+              {entry.kind === 'question' ? <span className="aha-lineTag">✋</span> : entry.kind === 'reexplain' || entry.kind === 'coach' ? <span className="aha-lineTag">🔄</span> : entry.kind === 'correction' ? <span className="aha-lineTag">✏️</span> : entry.kind === 'challenge' ? <span className="aha-lineTag">🧐</span> : null}
               <span className="aha-lineText"><Inline text={entry.text} /></span>
               {entry.pending ? <Spinner /> : null}
             </button>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { gradeObjective, wrongLabel } from '../core/grading.js'
+import { checkNeeds, instantGrade } from '../core/check-response.js'
+import { wrongLabel } from '../core/grading.js'
 import { ErrorLine } from './components.jsx'
 import { useApp } from './hooks.js'
 import { fixedLines, ITEM_VERDICT_KEYS } from './item-check.js'
@@ -52,26 +53,57 @@ export function ItemCard({ item: asked, language, onResult, onContinue, continue
   const answered = item.kind === 'multi' ? response.length > 0 : item.kind === 'order' ? true : String(response).trim() !== ''
   const ready = answered && (!askConfidence || confidence)
 
+  // The host grades an open answer (short, work) and also reads a typed
+  // answer the key refused: a blank may be right in other words, and a wrong
+  // one still deserves an explanation of that mistake. It also answers a
+  // "work" answer with the first line that went wrong.
+  function askTeacher(item) {
+    return api.call('lesson/grade', {
+      item: { kind: item.kind, prompt: item.prompt, answer: item.answer, rubric: item.rubric, tolerance: item.tolerance, unit: item.unit },
+      response,
+      language,
+    })
+  }
+
   async function submit() {
     if (!ready || result || grading) return
     const timeMs = Date.now() - started.current
+    const objective = instantGrade(item, response)
     let outcome
-    if (item.kind === 'short' || item.kind === 'work') {
+    if (checkNeeds(item, objective, response) !== 'none') {
       setGrading(true)
       setError(null)
       try {
-        const graded = await api.call('lesson/grade', { item: { kind: item.kind, prompt: item.prompt, answer: item.answer, rubric: item.rubric }, response, language })
-        outcome = { score: graded.score, correct: graded.verdict === 'correct', partial: graded.verdict === 'partial', feedback: graded.feedback, errorTag: graded.errorTag, misconception: graded.misconception }
-        if (item.kind === 'work') Object.assign(outcome, { wrongStep: graded.wrongStep ?? '', why: graded.why ?? '', fix: graded.fix ?? '' })
+        const graded = await askTeacher(item)
+        // The teacher may find the answer right although the key said no.
+        const correct = item.kind === 'work' || item.kind === 'short'
+          ? graded.verdict === 'correct'
+          : graded.verdict === 'correct' || (objective.correct && graded.verdict !== 'incorrect')
+        outcome = {
+          score: graded.score,
+          correct,
+          partial: !correct && (graded.verdict === 'partial' || graded.score > 0),
+          feedback: graded.feedback,
+          errorTag: graded.errorTag || (correct ? '' : wrongLabel(item, response)),
+          misconception: graded.misconception,
+          gradedBy: 'teacher',
+          ...(item.kind === 'work' ? { wrongStep: graded.wrongStep ?? '', why: graded.why ?? '', fix: graded.fix ?? '' } : {}),
+        }
       } catch (failure) {
+        // The teacher could not read it: the key's own verdict still stands,
+        // so a lesson never stops on a failed grading call, and the reason is
+        // shown under the answer.
+        if (!objective) {
+          setError(failure)
+          setGrading(false)
+          return
+        }
         setError(failure)
-        setGrading(false)
-        return
+        outcome = { score: objective.score, correct: objective.correct, partial: !objective.correct && objective.score > 0, errorTag: wrongLabel(item, response), gradedBy: 'key' }
       }
       setGrading(false)
     } else {
-      const graded = gradeObjective(item, response)
-      outcome = { score: graded.score, correct: graded.correct, partial: !graded.correct && graded.score > 0, errorTag: graded.correct ? '' : wrongLabel(item, response) }
+      outcome = { score: objective.score, correct: objective.correct, partial: !objective.correct && objective.score > 0, errorTag: objective.correct ? '' : wrongLabel(item, response) }
     }
     const full = { ...outcome, response: typeof response === 'string' ? response : undefined, given: response, confidence: confidence ?? undefined, timeMs, hintsUsed: hints }
     setResult(full)
@@ -208,7 +240,9 @@ export function ItemCard({ item: asked, language, onResult, onContinue, continue
         <RichText text={result.wrongStep} compact />
         {result.fix ? <><span className="aha-hint">{t('fixedStep')}</span><RichText text={result.fix} compact /></> : null}
       </div> : null}
-      {item.kind !== 'short' && item.kind !== 'work' && !result.correct ? <div className="aha-hint">{answerLabel(item)}</div> : null}
+      {/* The teacher's own words are above; the key still follows, to compare
+          against, without the "not quite" framing it would carry on its own. */}
+      {!result.correct ? <div className="aha-hint">{result.gradedBy === 'teacher' ? t('keySays', { answer: answerLabel(item).replace(/^✔ /u, '') }) : answerLabel(item)}</div> : null}
       {onChallenge && doubt === null && check?.status !== 'checking' ? <button type="button" className="aha-itemFlag" onClick={() => setDoubt('')}>🧐 {t('itemChallenge')}</button> : null}
     </div> : null}
 

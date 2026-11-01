@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
+import { checkNeeds, coachMove } from '../src/core/check-response.js'
 import { applyEvidence, createConceptState, masteryLevel, masteryPercent, masteryStage, recommendNext, stageForPercent, summarizeForPrompt } from '../src/core/mastery.js'
 import { createCard, dueCards, gradeFromScore, review } from '../src/core/srs.js'
-import { gradeObjective, normalizeAnswerText } from '../src/core/grading.js'
+import { gradeObjective, normalizeAnswerText, parseAnswerNumber } from '../src/core/grading.js'
 
 test('a confident correct answer raises mastery more than a lucky guess', () => {
   const base = createConceptState('cpt_a', 'limits')
@@ -102,4 +103,62 @@ test('objective grading handles choices, partial multi-select, numbers and blank
   assert.equal(gradeObjective({ kind: 'order', answer: ['a', 'b', 'c'] }, ['a', 'c', 'b']).score, 0.33)
   assert.equal(gradeObjective({ kind: 'short', answer: 'x' }, 'x').gradable, false)
   assert.equal(normalizeAnswerText('  Hello，World！ '), 'hello,world')
+})
+
+test('a typed answer counts when it is the same answer written differently', () => {
+  const formula = { kind: 'blank', answer: ['-kx', '−kx', '-k x', '−k x', '-k*x'] }
+  // The key as written, and the same formula typed by a learner.
+  for (const given of ['-kx', '-k x', '−kx', '− k x', '（-kx）', 'F = -kx', 'F=-kx']) {
+    assert.equal(gradeObjective(formula, given).correct, true, given)
+  }
+  // A different formula is still wrong: leniency is not guessing.
+  for (const given of ['k x', 'kx', 'F=kx', '']) assert.equal(gradeObjective(formula, given).correct, false, given)
+  assert.equal(gradeObjective({ kind: 'blank', answer: ['光合作用'] }, '光合作用。').correct, true)
+  assert.equal(gradeObjective({ kind: 'blank', answer: ['Photosynthesis'] }, 'photo synthesis').correct, true)
+  assert.equal(gradeObjective({ kind: 'blank', answer: ['Photosynthesis'] }, 'respiration').correct, false)
+  // A number typed with its unit is that number; a second figure is not.
+  assert.equal(gradeObjective({ kind: 'number', answer: 4 }, '4 N').correct, true)
+  assert.equal(gradeObjective({ kind: 'number', answer: 4 }, '4牛').correct, true)
+  assert.equal(gradeObjective({ kind: 'number', answer: 0.5 }, '0.5 s').correct, true)
+  assert.equal(gradeObjective({ kind: 'number', answer: 9.81, tolerance: 0.05 }, '9.8 m/s²').correct, true)
+  assert.equal(gradeObjective({ kind: 'number', answer: 4 }, '4 + 5').correct, false)
+  assert.equal(gradeObjective({ kind: 'number', answer: 4 }, '5').correct, false)
+  assert.equal(parseAnswerNumber('12.5 cm'), 12.5)
+  assert.ok(Number.isNaN(parseAnswerNumber('two')))
+})
+
+test('an answer the key refused is read by the teacher, a picked option is not', () => {
+  const wrong = { correct: false, score: 0, gradable: true }
+  // Typed answers may be right in words the key does not list, and a wrong one
+  // still deserves an explanation of that mistake.
+  assert.equal(checkNeeds({ kind: 'short' }, wrong, 'something'), 'grade')
+  assert.equal(checkNeeds({ kind: 'work' }, wrong, 'something'), 'grade')
+  // A typed answer the key refused is read by the teacher (a blank may be
+  // right in other words); a chosen option is settled by the key alone.
+  assert.equal(checkNeeds({ kind: 'blank' }, wrong, 'something'), 'coach')
+  assert.equal(checkNeeds({ kind: 'number' }, wrong, '4'), 'none')
+  // A pick is unambiguous, and the right answer needs no review.
+  assert.equal(checkNeeds({ kind: 'choice' }, wrong, 'a'), 'none')
+  assert.equal(checkNeeds({ kind: 'multi' }, wrong, ['a']), 'none')
+  assert.equal(checkNeeds({ kind: 'blank' }, { correct: true, score: 1, gradable: true }, '-kx'), 'none')
+  assert.equal(checkNeeds({ kind: 'short' }, { correct: true, score: 1 }, 'x'), 'grade', 'a written answer is always read')
+  assert.equal(checkNeeds({ kind: 'blank' }, wrong, '   '), 'none')
+  assert.equal(checkNeeds({ kind: 'blank' }, { gradable: false }, 'x'), 'none')
+})
+
+test('the teacher follows up the answer that was given', () => {
+  const wrong = { score: 0, correct: false, partial: false }
+  const partial = { score: 0.5, correct: false, partial: true }
+  const right = { score: 1, correct: true, partial: false }
+  // Wrong: explain it again from what this answer shows they believe.
+  assert.deepEqual(coachMove({ graded: wrong, response: 'k x' }), { kind: 'reteach' })
+  // Half there: supply exactly the missing piece.
+  assert.deepEqual(coachMove({ graded: partial, response: '方向相反，但' }), { kind: 'repair' })
+  // Right: no aside, the card says so.
+  assert.deepEqual(coachMove({ graded: right, response: '-kx' }), { kind: 'none' })
+  // Nothing to work with, and a learner who keeps missing it.
+  assert.deepEqual(coachMove({ graded: wrong, response: '  ' }), { kind: 'none' })
+  assert.deepEqual(coachMove({ graded: wrong, response: 'k x', attempts: 3 }), { kind: 'none' })
+  assert.deepEqual(coachMove({ graded: wrong, response: 'k x', attempts: 2 }), { kind: 'reteach' })
+  assert.deepEqual(coachMove({}), { kind: 'none' })
 })

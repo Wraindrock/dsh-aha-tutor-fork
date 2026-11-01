@@ -8,7 +8,15 @@ All notable changes to this plugin are recorded here. Versions follow [SemVer](h
 
 - **Edge online voice, free and without a key**: a fourth voice source in **Settings → Narration**, between the system voice and the cloud voice. It speaks through Microsoft Edge's read-aloud service, host-side only, with no account, key or extra dependency: pick from the service’s full voice library, searchable by name or language and sorted with your own language first, and press **Test**. Long narration is cut by speaking time into requests of at most about three minutes, each synthesized on its own and joined back into one MP3, so a two-minute or twenty-minute passage is safe. Spoken sentences are cached next to the other speech audio, so replaying a lesson makes no request, and exported videos can be narrated with it. The service is an unofficial Edge interface and may change or stop; a failure says so and the lesson goes on, as with any voice.
 
+### Changed
+
+- **A lesson is taught, not read out**: the whiteboard script is an outline the teacher speaks from. The prompt now asks for a person talking to this one learner — pointing at what was just written, wondering aloud, saying the quiet parts ("this is the step everyone trips on"), never dictating the board back or spelling a formula out after writing it. Lessons make three to five points properly instead of covering everything, with 2–3 checks on the ideas that matter and a recap that asks the learner to say the main point back.
+
+- **A typed answer is judged on what it says, not on the character count**: a blank now counts "-kx", "− k x", "F = -kx", "（-kx）" and the key's own forms as the same answer, and a number counts with its unit ("4 N", "4牛", "9.8 m/s²"). An answer the key refuses but a person should read — a blank written in other words, a number typed as words — goes to the teacher, who decides it and may credit it, instead of the learner being told they are wrong.
+
 ### Fixed
+
+- **The teacher answers the answer**: after a check, the lesson no longer just moves on. A wrong answer is re-taught at the board from what that answer shows the learner believes (named plainly, then the picture that contradicts it, then the right idea); a half-right answer gets exactly the missing piece and no more; a right one is confirmed in a sentence. The follow-up is anchored to the step, kept with the lesson like a raised hand, and the lesson carries on from there. A learner who misses the same question three times is not re-taught a fourth.
 
 - **The Edge voice you pick is the one that speaks**: the voice chooser saved the choice, but the host sent every request with the service's default voice, so all of them sounded the same. The chosen voice now travels with each request, including the ones a long narration is split into, and a voice the service will not speak for the text (an English-only voice asked to read Chinese) says which voice it was instead of failing silently. Audio cached in the wrong voice before this fix is no longer replayed for another voice.
 

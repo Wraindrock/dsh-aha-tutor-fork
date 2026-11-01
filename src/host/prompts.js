@@ -98,7 +98,19 @@ A check is a short question asked right after the step, to see whether the idea 
 {"kind":"choice|multi|blank|number|short|work","prompt":"…","options":["…","…"],"answer":<option index (0-based) for choice, list of indexes for multi, accepted strings for blank, a number for number, a model answer for short, the full model working for work>,"tolerance":<number, for number>,"rubric":["…"],"explanation":"why the answer is right, in one or two sentences","conceptIds":["<ids from the concept list>"]}
 A "choice" has exactly one right option. When two or more options are right, use "multi" and say in the prompt that several may be chosen.
 A "work" check has the learner write out a whole calculation or derivation: "answer" is the model working, one step per line with inline math $…$, and "rubric" lists the 2–4 steps a correct working must contain. Use "work" only where the instructions ask for it.
-Make wrong options plausible (common mistakes), never trick questions.`
+Make wrong options plausible (common mistakes), never trick questions.
+A "blank" is for a short, checkable answer a learner types: a term, a symbol, a formula, a number with a unit. List the spellings a right answer may take (abbreviations, another notation, with or without the equals sign). Never make a blank the place to answer "explain why…": that is what "short" is for, and the teacher reads it.`
+
+// Teaching is a person talking to one learner, not a script being read. This
+// is what keeps a lesson an outline told aloud rather than a transcript.
+export const ACTING_SPEC = `HOW YOU TEACH
+You are speaking, not being read. "say" is what the learner hears you say — nothing else is spoken, and nothing you leave out of it is ever said. So:
+- Say the lesson in your own words as you would to this one learner, looking at the board: point at what you just wrote, wonder aloud, react to what it implies, pause on the part that is easy to get wrong. Vary the length — a short sentence after two long ones; a question you then answer; sometimes just "看这里" with your finger on the formula.
+- Never dictate the board. Do not read a heading back verbatim, do not spell out a formula character by character after it is written, do not narrate "I am now writing…". The board holds what should stay visible; you say what it means, why it is there, and where it leads.
+- Do not cover everything. A lesson of 10–14 steps makes three to five points properly and leaves the rest to the learner's practice. Depth on the parts that carry the idea beats breadth.
+- The plan is yours, not a script: each step knows where it is going, but the words are spoken to this learner (see the learner block), with their name, their goal and their weak spots in mind.
+- Each step earns its place: something new on the board, or a question worth asking. If a step would only repeat the previous one, fold it into that one.
+- Checks are a conversation, not an exam: each one asks about the idea just taught, in the way that makes a wrong answer informative (a choice that names a real misconception, a blank whose answer is one thing, a "short" that asks them to say it back). The teacher then answers their answer.`
 
 // ── course crafting ─────────────────────────────────────────────────────────
 
@@ -272,9 +284,9 @@ const DEPTH_GUIDANCE = Object.freeze({
 })
 
 export function lessonPrompt({ course, unit, lecture, lesson, language, learner, passages, previous, directive, style }) {
-  const steps = Math.min(18, Math.max(7, Math.round((lesson.estMinutes || 15) * 0.7)))
+  const steps = Math.min(16, Math.max(7, Math.round((lesson.estMinutes || 15) * 0.6)))
   return {
-    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, ACTING_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       block('course', `${course.title} (${course.level || 'mixed level'}) — ${course.summary ?? ''}`),
       block('position', `Unit: ${unit.title}\nLecture: ${lecture.title}\nLesson: ${lesson.title}\nObjectives: ${lesson.objectives.join('; ')}\nConcepts (id=name): ${lesson.concepts.map(concept => `${concept.id}=${concept.name}`).join(', ')}`),
@@ -284,15 +296,16 @@ export function lessonPrompt({ course, unit, lecture, lesson, language, learner,
       style ? block('style_request', style) : '',
       DIRECTIVES[directive] ?? '',
       DEPTH_GUIDANCE[lesson.depth] ?? '',
-      `Teach this lesson in about ${steps} steps (~${lesson.estMinutes || 15} minutes).
+      `Teach this lesson in about ${steps} steps (~${lesson.estMinutes || 15} minutes). This is a lesson outline you speak from, not a script: decide what deserves the board, then say it to this learner in the words you would actually use.
 - Open with a hook: a question, a surprising fact, or a concrete situation the idea explains. Connect to the previous lesson when there is one.${learner?.profile?.name ? ' Call the learner by name once, in the opening step.' : ''}
-- Build intuition before formalism; then make it precise; then work at least one example fully on the board.
-- Draw a diagram, chart or plot whenever a picture makes the idea click; a plot with a slider is often the clearest way to show how a formula behaves.
-- Put 2–4 checks after the key ideas, plus one at the end; every check must name its conceptIds.
+- Build intuition before formalism; then make it precise; then work at least one example fully on the board. Say why each step is there — the reasoning is what they came for, not the notation.
+- Draw a diagram, chart or plot whenever a picture makes the idea click; a plot with a slider is often the clearest way to show how a formula behaves. When you use one, say what to look at and what changes when the slider moves.
+- Put 2–3 checks after the ideas that matter most, plus one at the end; every check must name its conceptIds. A check is how you find out what they actually took in — ask the thing that would reveal a misunderstanding, not the thing that repeats the sentence you just said.
 - If the lesson works through a calculation or a derivation, make exactly one check a "work" check, right after the key worked example: a similar problem the learner solves alone, writing every step. A lesson without a calculation or derivation gets no "work" check.
 - If source passages are given, stay consistent with them and mention the page when you lean on one.
-- Close with a recap step: a "key" note with the 2–3 takeaways, and say what comes next.
+- Close with a recap step: a "key" note with the 2–3 takeaways, and say what comes next. Ask them to say the main point back in their own words as the last check when the lesson allows it.
 - Give each step that works towards one of the objectives "goal": its 0-based index in the objectives above (${lesson.objectives.map((objective, index) => `${index} = ${objective}`).join('; ') || 'none'}); leave it out for the hook and the recap. Cover the objectives in order.
+- Before you write, plan the arc: hook → the idea felt → the idea stated → one example worked → practice → recap. Say the quiet parts too: "this is the step everyone trips on", "notice it does not depend on the mass".
 Start with a step whose ops begin with {"t":"title","text":"${lesson.title.replace(/"/gu, '\\"')}"}.`,
     ),
   }
@@ -320,14 +333,38 @@ const REEXPLAIN_STYLES = Object.freeze({
   deeper: 'more rigorously, showing why it is true and where it breaks down',
 })
 
-export function reexplainPrompt({ lesson, language, step, boardSoFar, style }) {
+export function reexplainPrompt({ lesson, language, step, boardSoFar, style, answer, grade }) {
+  // The learner just answered the step's check and it did not land: the
+  // re-teach starts from that answer, not from the step in general.
+  const said = String(answer ?? '').trim()
+  const missed = said
+    ? block('learner_answer', `${said}${grade?.verdict ? `\nGraded: ${grade.verdict}` : ''}${grade?.feedback ? `\nFeedback already shown: ${grade.feedback}` : ''}${grade?.errorTag ? `\nThe mistake, in a few words: ${grade.errorTag}` : ''}`)
+    : ''
   return {
     system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
     user: join(
       block('lesson', lesson ? lesson.title : ''),
       block('board_so_far', boardSoFar),
       block('step_to_reexplain', step),
-      `The learner did not get this step. Explain the same idea again ${REEXPLAIN_STYLES[style] ?? REEXPLAIN_STYLES.example}, in 2–4 steps, starting with {"t":"page","title":"…"}. End with one quick check.`,
+      missed,
+      missed
+        ? `The learner answered the check on this step and did not get it right. Do not repeat the same explanation: start from what their answer shows they believe. Name the wrong idea plainly and kindly in one sentence, show the picture or example that contradicts it, and then lead to the right idea ${REEXPLAIN_STYLES[style] ?? REEXPLAIN_STYLES.example}, in 2–4 steps, starting with {"t":"page","title":"…"}. End with one quick check that tests the same idea a different way.`
+        : `The learner did not get this step. Explain the same idea again ${REEXPLAIN_STYLES[style] ?? REEXPLAIN_STYLES.example}, in 2–4 steps, starting with {"t":"page","title":"…"}. End with one quick check.`,
+    ),
+  }
+}
+
+// The learner answered a check only partly right: finish the missing part
+// without starting the idea over.
+export function repairPrompt({ lesson, language, step, boardSoFar, answer, grade }) {
+  return {
+    system: join(PERSONA, BOARD_SPEC, STEP_SPEC, languageRule(language), JSONL_ONLY),
+    user: join(
+      block('lesson', lesson ? lesson.title : ''),
+      block('board_so_far', boardSoFar),
+      block('step_to_reexplain', step),
+      block('learner_answer', `${answer}${grade?.verdict ? `\nGraded: ${grade.verdict}` : ''}${grade?.feedback ? `\nFeedback already shown: ${grade.feedback}` : ''}`),
+      'The learner has part of this right. In 1–2 steps, continuing on the current board, say what they already got, then supply exactly the missing piece and show it on the board (one op that makes the difference), and finish with the whole answer said once as a sentence. Do not explain the whole idea again, and add no check.',
     ),
   }
 }
@@ -336,10 +373,19 @@ const GRADE_FIELDS = '"score":<0 to 1>,"verdict":"correct|partial|incorrect","fe
 
 // A "work" item is a written-out working: the grader also finds the first
 // line that goes wrong, so the teacher can correct exactly that line.
+//
+// `item.kind` is passed through for every kind the classroom asks about, not
+// just "work" and "short": a blank or a number the machine called wrong is
+// read here too, so an answer right in other words is credited and a wrong
+// one gets an explanation of that mistake.
 export function gradePrompt({ item, response, language }) {
   const work = item.kind === 'work'
+  const typed = item.kind === 'blank' || item.kind === 'number'
+  const tolerance = typed
+    ? ' The answer key lists one or a few accepted spellings; a learner who wrote the same idea in other words, another notation, a formula instead of a word, or the number with its unit is right. Mark it "correct" and say how it differs from the key, so the key can be widened.'
+    : ''
   return {
-    system: join(PERSONA, `You grade open answers fairly: credit correct ideas expressed in the learner's own words, ignore spelling and phrasing, and pinpoint the exact gap.${work ? ' For a written working, follow it line by line and find the first line that goes wrong; a different but valid route is not a mistake, and a slip carried forward counts once.' : ''} ${languageRule(language)}`, JSON_ONLY),
+    system: join(PERSONA, `You grade open answers fairly: credit correct ideas expressed in the learner's own words, ignore spelling and phrasing, and pinpoint the exact gap.${work ? ' For a written working, follow it line by line and find the first line that goes wrong; a different but valid route is not a mistake, and a slip carried forward counts once.' : ''}${tolerance} ${languageRule(language)}`, JSON_ONLY),
     user: join(
       block('question', item.prompt),
       block(work ? 'model_working' : 'model_answer', item.answer),

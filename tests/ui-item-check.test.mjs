@@ -193,6 +193,79 @@ test('a card without checks offers none, and a question fixed earlier shows its 
   assert.equal(buttons(other, zh.itemChallenge).length, 1)
 })
 
+// A question whose answer is typed, and the host that grades it.
+const TYPED = {
+  id: 'i9',
+  kind: 'blank',
+  prompt: '胡克定律可以写成 $F =$ ____（用 $k$ 和 $x$ 表示）。',
+  explanation: '负号表示力的方向与位移相反。',
+  hints: [],
+  difficulty: 1,
+  conceptIds: ['cpt_aaaaaaaa'],
+  answer: ['-kx'],
+  question: undefined,
+}
+
+function renderTyped(item, graded) {
+  const calls = []
+  const results = []
+  const api = {
+    call: async (endpoint, payload) => {
+      calls.push([endpoint, payload])
+      if (endpoint === 'lesson/grade') return graded
+      return null
+    },
+  }
+  const props = { item, language: 'zh-CN', onResult: result => results.push(result), onContinue: () => undefined, askConfidence: false }
+  const element = h(bundle.AppContext.Provider, { value: { api, t, language: 'zh' } }, h(bundle.ItemCard, props))
+  let renderer
+  act(() => { renderer = TestRenderer.create(element) })
+  return { renderer, calls, results }
+}
+
+const typeIn = (renderer, value) => act(() => renderer.root.findByType('input').props.onChange({ currentTarget: { value } }))
+
+test('a typed answer the key refused is read by the teacher, and its verdict counts', async () => {
+  const { renderer, calls, results } = renderTyped(TYPED, { score: 1, verdict: 'correct', feedback: '对，负号表示方向相反。', errorTag: '' })
+  // The key lists "-kx"; the learner writes it in words, which only the
+  // teacher can settle. (A learner who writes "F = -kx" is matched locally.)
+  typeIn(renderer, '负的 k 乘以 x')
+  await act(async () => { buttons(renderer, zh.submit)[0].props.onClick() })
+  assert.deepEqual(calls.map(([endpoint]) => endpoint), ['lesson/grade'], 'an open-or-typed answer goes to the host')
+  assert.equal(calls[0][1].item.kind, 'blank', 'the host is told what kind of answer it is')
+  assert.equal(results.length, 1)
+  assert.deepEqual([results[0].correct, results[0].gradedBy, results[0].errorTag], [true, 'teacher', ''])
+  assert.match(textOf(renderer.root), /答对了/u)
+  assert.match(textOf(renderer.root), /负号表示方向相反/u, 'the teacher\'s feedback is shown')
+})
+
+test('a typed answer that is still wrong explains this mistake, and the key is shown as what it lists', async () => {
+  const { renderer, results } = renderTyped(TYPED, { score: 0, verdict: 'incorrect', feedback: '负号才是回复力指向平衡位置的原因。', errorTag: '漏了负号' })
+  typeIn(renderer, 'kx')
+  await act(async () => { buttons(renderer, zh.submit)[0].props.onClick() })
+  assert.deepEqual([results[0].correct, results[0].gradedBy, results[0].errorTag], [false, 'teacher', '漏了负号'])
+  const shown = textOf(renderer.root)
+  assert.match(shown, new RegExp(zh.incorrect, 'u'))
+  assert.match(shown, /负号才是回复力指向平衡位置的原因/u, 'the answer to *this* answer')
+  assert.match(shown, /参考答案：-kx/u)
+  assert.match(shown, /-kx/u, 'the key is still there to compare with')
+})
+
+test('a failed grading call leaves the key\'s verdict standing and says why', async () => {
+  // A number written in words cannot be settled locally, so the host is asked;
+  // when it cannot answer, the key's own verdict still lets the lesson go on.
+  const api = { call: async () => { throw Object.assign(new Error('busy'), { code: 'aha-tutor/llm-timeout' }) } }
+  const props = { item: { ...TYPED, kind: 'number', answer: 4 }, language: 'zh-CN', onResult: () => undefined, askConfidence: false }
+  let failing
+  act(() => { failing = TestRenderer.create(h(bundle.AppContext.Provider, { value: { api, t, language: 'zh' } }, h(bundle.ItemCard, props))) })
+  const input = failing.root.findByType('input')
+  act(() => input.props.onChange({ currentTarget: { value: '四' } }))
+  await act(async () => { buttons(failing, zh.submit)[0].props.onClick() })
+  const shown = textOf(failing.root)
+  assert.match(shown, new RegExp(zh.incorrect, 'u'), 'the key still gives a verdict')
+  assert.match(shown, new RegExp(zh['err_llm-timeout'], 'u'), 'and the reason the teacher could not read it is shown')
+})
+
 test('a question\'s prompt is set in the prompt type; its options take the text around them', () => {
   const { renderer } = renderCard({ item: PRIME, language: 'zh-CN' })
   const markdown = renderer.root.findAll(node => node.type === 'div' && /\baha-markdown\b/u.test(node.props.className ?? ''))
