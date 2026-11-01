@@ -307,8 +307,15 @@ test('everything written on the board is also said out loud', () => {
   // The learner reads the board and listens at the same time: an item they
   // never hear is a gap, so both specs state the rule and no spec tells the
   // model to stay off the board.
-  for (const spec of [STEP_SPEC, ACTING_SPEC]) assert.match(spec, /EVERYTHING ON THE BOARD IS SAID OUT LOUD|Say everything you write/u)
-  assert.match(ACTING_SPEC, /Never leave a board item unspoken/u)
+  assert.match(STEP_SPEC, /EVERY BOARD ITEM IS SPOKEN IN THE SAME STEP/u)
+  assert.match(ACTING_SPEC, /Say everything you write/u)
+  // Every kind of op is named, including the ones that feel like labels:
+  // those were the ones that went unsaid in a real lesson.
+  for (const kind of ['heading', 'formula', 'bullet', 'note', 'table', 'diagram', 'chart']) {
+    assert.match(STEP_SPEC, new RegExp(kind, 'iu'), kind)
+  }
+  assert.match(STEP_SPEC, /Self-check every step/u, 'the model is told to verify each step before answering')
+  assert.match(STEP_SPEC, /or delete it/u, 'an op that cannot be voiced should not be written')
   // …without swinging back to reciting it and adding nothing.
   assert.match(ACTING_SPEC, /Do not recite the board instead of teaching it/u)
   assert.match(ACTING_SPEC, /reading it out and moving on is not/u)

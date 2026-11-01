@@ -80,7 +80,9 @@ test('the checking model sees the step in full and the board around it', () => {
   assert.deepEqual(lines.map(line => JSON.parse(line).id), ['s1', 's2', 's3'])
   assert.equal(JSON.parse(lines[1]).ops[0].svg, '…', 'diagrams of the board show their captions only')
   assert.deepEqual(boardForCheck(steps, 's2', { maxChars: 700 }).split('\n').map(line => JSON.parse(line).id), ['s1', 's2'], 'nearest steps first, within the budget')
-  assert.match(describeFixes([{ step: 's2', say: '贰' }], steps), /s2 narration: 二 → 贰/u)
+  // The step's own words now include the caption nothing said (图二), so the
+  // fix is shown against that narration.
+  assert.match(describeFixes([{ step: 's2', say: '贰' }], steps), /s2 narration: 二。图二。 → 贰/u)
   // A step the classroom sends keeps its own ids; anything unusable goes.
   const sent = sanitizeStep({ id: 'a2_s1', say: '答案', ops: [{ t: 'p', text: '对', id: 'a2_o1', at: 0 }, { t: 'evil', id: 'a2_o2' }, { t: 'p', text: 'no id' }] })
   assert.deepEqual(sent, { id: 'a2_s1', say: '答案', ops: [{ id: 'a2_o1', t: 'p', text: '对', at: 0 }] })
@@ -117,7 +119,7 @@ const blueprint = {
 
 const lessonLines = concept => [
   { say: '先看公式。', ops: [{ t: 'title', text: '弹簧的力' }, { t: 'math', tex: 'F=-kx' }] },
-  { say: '代入 x = 5 cm = 0.5 m。', ops: [{ t: 'p', text: '$x = 0.5$ m' }, { t: 'math', tex: '|F| = 100\\ \\text{N}' }] },
+  { say: '代入 x = 5 cm = 0.5 m，力的大小是 100 牛。', ops: [{ t: 'p', text: '$x = 0.5$ m' }, { t: 'math', tex: '|F| = 100\\ \\text{N}', text: '|F| = 100 N' }] },
   { say: '所以是 100 牛。', ops: [{ t: 'note', text: '100 N' }], check: { kind: 'number', prompt: '压缩 2 cm？', answer: 40, conceptIds: [concept] } },
 ].map(line => JSON.stringify(line)).join('\n')
 
@@ -221,13 +223,14 @@ test('a wrong step is checked with thinking, fixed where it is kept and correcte
     assert.equal(result.verdict, 'wrong')
     assert.deepEqual(result.target, { main: true })
     assert.equal(result.fixes.length, 5)
-    assert.equal(result.steps[0].say, '你说得对，这里错了。')
+    assert.match(result.steps[0].say, /^你说得对，这里错了。/u, 'the teacher\'s words come first')
+    assert.match(result.steps[0].say, /核对/u, 'the op it writes is said in the same step')
 
     // Checked by a model that thinks first, answered by one that does not.
     const check = llm.calls.find(call => call.user.includes('Decide whether step s2'))
     assert.equal(check.effort, 'low')
     assert.equal(check.purpose, 'teach')
-    assert.match(check.user, /<challenged_step>\n\{"id":"s2","say":"代入 x = 5 cm = 0\.5 m。"/u)
+    assert.match(check.user, /<challenged_step>\n\{"id":"s2","say":"代入 x = 5 cm = 0\.5 m，力的大小是 100 牛。"/u)
     assert.match(check.user, /<learner_says>\n5 cm 不是 0\.5 m 吧？/u)
     const reply = llm.calls.find(call => call.user.includes('<check_result>'))
     assert.equal(reply.effort, 'lowest')
@@ -235,8 +238,11 @@ test('a wrong step is checked with thinking, fixed where it is kept and correcte
 
     // The saved board is fixed, ids and all; the answer stays with the lesson.
     const saved = await store.readJson(store.paths.board(courseId, lesson.id), null)
-    assert.deepEqual(saved.steps[1].ops.map(op => [op.id, op.t, op.fixed?.was ?? null]), [['o3', 'p', '$x = 0.5$ m'], ['o4', 'math', '|F| = 100\\ \\text{N}']])
-    assert.equal(saved.steps[1].say, '代入 x = 5 cm = 0.05 m。')
+    // The checked step keeps its ops, and the fixed line is the one written.
+    assert.deepEqual(saved.steps[1].ops.map(op => [op.id, op.t]), [['o3', 'p'], ['o4', 'math']])
+    assert.equal(saved.steps[1].ops[0].text, '$x = 0.05$ m')
+    // The fix replaces the narration; the board it writes is then voiced too.
+    assert.match(saved.steps[1].say, /^代入 x = 5 cm = 0\.05 m。/)
     assert.equal(saved.steps[2].check.answer, 4)
     assert.equal(saved.steps[2].check.id, 'k3')
     const kept = (await lessons.get({ courseId, lessonId: lesson.id })).asides.at(-1)
@@ -250,7 +256,7 @@ test('a wrong step is checked with thinking, fixed where it is kept and correcte
     const right = await finish(jobs, lessons.challenge({ scope, stepIndex: 0, target: { stepId: 's1' } }))
     assert.deepEqual([right.verdict, right.fixes], ['right', []])
     assert.match(llm.calls.findLast(call => call.user.includes('Decide whether step')).user, /<learner_says>\n\(no reason given\)/u)
-    assert.equal((await store.readJson(store.paths.board(courseId, lesson.id), null)).steps[0].say, '先看公式。')
+    assert.match((await store.readJson(store.paths.board(courseId, lesson.id), null)).steps[0].say, /^先看公式。/)
 
     // A step of a kept answer is fixed inside that answer.
     const asked = await finish(jobs, lessons.ask({ scope, stepIndex: 1, anchorStepId: 's2', question: '1+2 呢？' }))

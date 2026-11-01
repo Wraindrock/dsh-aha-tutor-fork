@@ -3,6 +3,7 @@
 // optionally followed by a quick understanding check. The normalizer accepts
 // loose model output and returns a strictly shaped, size-limited script.
 
+import { voiceBoard } from './board-spoken.js'
 import { normalizeItem, text } from './course-model.js'
 import { normalizePlot, plotToSource, plotToText } from './plot.js'
 
@@ -192,7 +193,8 @@ export function normalizeBoard(raw, { conceptIds = [] } = {}) {
     })
   }
   if (!steps.length) throw new Error('lesson script has no steps')
-  return { title: text(raw?.title, 160), steps }
+  // The prompt asks for every board item to be said; this makes sure of it.
+  return voiceBoard({ title: text(raw?.title, 160), steps })
 }
 
 // ── timing ──────────────────────────────────────────────────────────────────

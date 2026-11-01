@@ -394,7 +394,8 @@ test('questions about a board still being written use the steps written so far',
     await written(jobs, writing, 2)
     const reexplained = lessons.reexplain({ scope: { ...scope, jobId: writing.id }, stepIndex: 1, style: 'example', anchorStepId: 's2' })
     assert.equal((await finish(jobs, reexplained)).steps.length, 2)
-    assert.match(lastPrompt(REEXPLAIN).user, /<step_to_reexplain>\n\[s2\] 公式\n {2}\$F=-kx\$/u)
+    // The board item is now also said, so the step's line carries both.
+    assert.match(lastPrompt(REEXPLAIN).user, /<step_to_reexplain>\n\[s2\] 公式[\s\S]*\$F=-kx\$/u)
     assert.equal((await finish(jobs, lessons.ask({ scope: { ...scope, jobId: writing.id }, stepIndex: 1, question: '负号呢？' }))).steps[0].say, '这是你问题的答案')
     assert.match(lastPrompt('raised a hand').user, /<board_so_far>[\s\S]*F=-kx/u, 'a raised hand sees the board so far')
     await finish(jobs, lessons.correct({ scope: { ...scope, jobId: writing.id }, stepIndex: 1, item: { prompt: '解 $x^2=4$', answer: '$x=\\pm 2$' }, response: '$x=2$' }))
@@ -404,7 +405,7 @@ test('questions about a board still being written use the steps written so far',
     assert.equal((await failure(jobs, lessons.reexplain({ scope: { ...scope, jobId: reexplained.id }, stepIndex: 1 }))).code, 'no-board')
     assert.equal((await failure(jobs, lessons.reexplain({ scope: { kind: 'lesson', courseId, lessonId: second.id, jobId: writing.id }, stepIndex: 1 }))).code, 'no-board')
     llm.release()
-    assert.equal((await finish(jobs, writing)).board.steps[1].say, '公式')
+    assert.equal((await finish(jobs, writing)).board.steps[1].say, '公式。F = - kx。', 'the formula is said with its step')
     const kept = (await lessons.get({ courseId, lessonId: first.id })).asides
     assert.deepEqual(kept.map(aside => [aside.kind, aside.anchorStepId]), [['reexplain', 's2'], ['question', 's2'], ['correction', 's2']], 'they stay with the lesson')
     for (let attempt = 0; attempt < 300 && !(await store.exists(store.paths.board(courseId, second.id))); attempt += 1) await new Promise(resolve => setTimeout(resolve, 3))
